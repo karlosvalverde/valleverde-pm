@@ -5,27 +5,26 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
-### Planned for 0.2.0
-- Opt-in Odoo connection with your own API key: your tasks, timesheets and email, run locally and limited to an explicit list of allowed requests.
+## [0.2.0] - 2026-11-04
+
+Valleverde PM becomes a local desktop app built with Tauri. It's a planning scratchpad that comes before Odoo, modeled on a daily to-do note.
+
+### Added
+- **Time budget:** time left is the sum of the durations written in open lines (`15m`, `2h`, `1h30`), compared with what remains of the working day: “1h15 free” or “45m over”.
+- **Day ribbon:** a bar showing the time already gone, the work planned, the end of the day, and any overflow past it.
+- **Tasks** as a keyboard-first outline of projects and their time-boxed actions. Projects show their open total; done projects collect at the bottom.
+- **Week goals,** linked by name to the day's projects (“Goal 1”), with the time planned for each.
+- **Routines:** recurring blocks added to every new day, which can be checked off or skipped for one day.
+- **Carry-over:** open tasks from the previous day can be brought over in one click, and open goals from the previous week.
+- **Copy day as text,** in the note's format, and **Copy week summary,** with time done per project for updating Odoo by hand.
+- **Storage in one JSON file** in a folder you choose (iCloud Drive works), saved as you type, with a daily backup and the last 30 kept.
+- A browser preview (`npm run preview`) for trying the interface without building the app.
+
+### Removed
+- The Odoo connection, the Cloudflare relay and the GitHub Pages deployment.
+- Mail templates, the calendar, the project diary and the timesheet grid.
+- Claude drafting and every API key.
 
 ## [0.1.0] - 2026-11-03
 
-First release: a personal, offline project-management companion.
-
-### Added
-- **Today:** a daily overview of upcoming events, weekly goals, time logged and recent diary entries, with a start/stop timer.
-- **Mail templates** in English and Spanish:
-  - `{{placeholders}}` that fill in from the project and your details.
-  - Copy the email, or open it in your mail app.
-  - Example templates to start from.
-- **Calendar:** month view with meetings, milestones, deadlines, deliveries and site visits, colored by project.
-- **Weekly goals** with statuses, carry-over to the next week, and weekly notes.
-- **Timesheet:** daily log against a target, a weekly grid by project, and a CSV export laid out for Odoo’s timesheet import.
-- **Diary:** notes, decisions, meetings, issues, risks and change requests, with open/closed status, follow-up dates and Markdown export.
-- **Projects** with colors, client contacts and a default email language.
-- **Settings:** your details and signature, backup and restore.
-- **Local launch:** `npm start`, or `start.sh` / `start.bat`, serves the app on `http://localhost:8080`, to this computer only.
-
-### Data handling
-- Fully offline: the page’s Content-Security-Policy blocks all network requests, and fonts are bundled.
-- Your workspace is stored only in your browser. No accounts, servers or API keys.
+First version, as a web app on GitHub Pages connected to Odoo through a relay: mail templates in English and Spanish, calendar, weekly goals, timesheet and project diary.

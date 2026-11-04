@@ -1,104 +1,100 @@
 # Valleverde PM
 
-A personal, offline project-management companion. It keeps the day-to-day tools of a project manager in one place:
+A small desktop planner for project managers, for the step before Odoo. It works like a daily to-do note that does the time maths for you:
 
-- bilingual mail templates (English and Spanish)
-- a project calendar
-- weekly goals
-- a daily timesheet
-- a project diary
+- **Week goals** for the projects that matter this week.
+- **Routines,** like `15m PM Formech`, added to every day.
+- **Tasks:** projects and their time-boxed actions, like `15m FU` or `Icons - 2h`.
+- **Time left:** the durations in your open lines, added up and compared with what remains of your working day.
 
-It runs on your own computer and never sends anything over the network. Version 0.1 doesn’t connect to Odoo; see [Using it with Odoo](#using-it-with-odoo).
+Everything is saved to one file on your computer.
 
-## Install
+## Using it
 
-You need **Node.js 18 or newer** ([nodejs.org](https://nodejs.org)). There’s nothing else to install.
+Type the way you would in a note. Write a duration anywhere in a line (`15m`, `2h`, `1h30`, `1.5h`) and it counts toward the time left.
 
-1. Download the latest `valleverde-pm-x.y.z.zip` from [Releases](https://github.com/karlosvalverde/valleverde-pm/releases).
-2. Optionally, check that the download is intact by comparing its checksum with the `.sha256` file next to it in the release:
-   ```bash
-   shasum -a 256 valleverde-pm-0.1.0.zip           # macOS / Linux
-   certutil -hashfile valleverde-pm-0.1.0.zip SHA256   # Windows
-   ```
-3. Unzip it anywhere you like, for example in your home folder.
+| Keys | What it does |
+|---|---|
+| Return | New line |
+| Tab, Shift+Tab | Make a task part of the project above, or a project of its own |
+| ⌘+Return | Check or uncheck the line |
+| Option+↑ / ↓ | Move the line, or the whole project |
+| ← → T | Previous day, next day, today (when not typing) |
+| N | Add a task (when not typing) |
+| ⌘+, | Settings |
 
-## Start
+You can also drag a line by the dots to its left.
 
-Choose one:
-
-- **Terminal:** run `npm start` inside the unzipped folder.
-- **macOS / Linux:** run `./start.sh`.
-- **Windows:** double-click `start.bat`.
-
-Your browser opens **http://localhost:8080**. Keep the terminal window open while you use the app, and press `Ctrl+C` to stop it.
-
-You can also give it its own app window. In Chrome, open the menu, then **Cast, save and share**, then **Install page as app**. In Edge, open the menu, then **Apps**, then **Install this site as an app**. Menu names can vary between browser versions.
-
-Without Node.js, Python 3 also works: `python3 -m http.server 8080 --bind 127.0.0.1 --directory app`. Python doesn’t send the security headers that `server.js` adds, but the app’s own Content-Security-Policy still keeps it offline.
+- **Projects and goals:** a project whose name matches a week goal shows “Goal 1”, “Goal 2”, and so on. The goal shows how much time is planned for it today. Numbering like `1 - Partena` or `1. Partena` is ignored when matching.
+- **Done items:** checking every action of a project checks the project, and done projects collect at the bottom.
+- **Moving work:** when a previous day still has open tasks, a banner offers to bring them over. The originals are marked “Moved to …”, so nothing is counted twice. Open goals carry over the same way at the start of a week.
+- **Sharing:** the ⋯ menu copies the day as text, in the same format as the note, or a week summary with the time done per project, ready for entering timesheets in Odoo.
 
 ## Your data
 
-- **Where it lives:** your workspace is saved in your browser for the address `http://localhost:8080`, and nowhere else.
-- **Same address every time:** a different port or a different browser opens a separate, empty workspace.
-- **Backups:** use **Settings, then Your data, then Download backup** regularly. Use **Restore from backup** to move your workspace to another computer or browser.
-- **Updates keep your data:** download the new release, unzip it (you can replace the old folder), and start it as usual.
+Your data lives in `valleverde.json`, saved as you type. Before the first change each day, a copy goes to `backups/` next to it; the last 30 are kept.
 
-See [PRIVACY.md](PRIVACY.md) for details.
+- **Where it starts:** in the app's data folder. On macOS that's `~/Library/Application Support/com.karlosvalverde.valleverdepm/`.
+- **Moving it:** Settings, then **Choose folder…**. Pick a folder in iCloud Drive and the same file works on your other Macs; the app reloads it when you come back to the window. If both Macs edit at the same moment, the last save wins, and the backups folder has the earlier copies.
+- **Restoring a backup:** quit the app, copy a file from `backups/` over `valleverde.json`, and open the app again.
 
-## Using it with Odoo
+See [PRIVACY.md](PRIVACY.md).
 
-Version 0.1 is deliberately unconnected. You move your work into Odoo yourself:
+## Build it
 
-- **Emails:** compose from a template, copy it, then paste it into the task’s chatter in Odoo (Send message), or click **Open in mail app**.
-- **Timesheets:**
-  1. On the Timesheet screen, click **Export week as CSV**.
-  2. In Odoo, go to **Timesheets**, open the gear menu, then choose **Import records**.
-  3. Upload the file. The columns are named after Odoo’s timesheet fields (`date`, `project_id`, `task_id`, `name`, `unit_amount`), so Odoo maps them automatically.
-  4. Click **Test** before **Import**.
+You need:
 
-  Use the same project and task names as in Odoo so they match.
+- **Node.js 18 or newer.**
+- **Rust,** installed with [rustup](https://rustup.rs).
+- **On macOS, the Xcode command line tools:** run `xcode-select --install`.
 
-An opt-in direct connection is planned for 0.2.
-
-## Development
+Other platforms need the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
 
 ```bash
 git clone https://github.com/karlosvalverde/valleverde-pm.git
 cd valleverde-pm
-npm start          # run the app
-npm run check      # release checks: syntax, versions, offline guarantee, fonts
-npm run build      # build dist/valleverde-pm-<version>.zip and its checksum
+npm install
+npm run dev      # opens the app with live reload of src/
+npm run build    # makes the installable app
 ```
 
-### Repository layout
+The first build downloads and compiles the Rust dependencies, which takes a few minutes; later builds are quick.
 
-```
-app/index.html      the whole app (HTML, CSS, JS)
-app/fonts/          bundled fonts (SIL Open Font License, see OFL.txt)
-server.js           local server, no dependencies
-start.sh, start.bat launchers
-tools/              check, build and release-notes scripts
-.github/workflows/  ci.yml (checks on every push), release.yml (publishes releases)
-```
+`npm run build` puts the app in `src-tauri/target/release/bundle/`, as `macos/Valleverde PM.app` and a `dmg/` installer. Drag the app to Applications. Because you built it yourself, macOS opens it without a warning.
 
-### Versioning and releases
+To try the interface without Rust, run `npm run preview` and open http://localhost:8080. In the preview, data is kept in that browser instead of a file.
 
-Valleverde PM follows [Semantic Versioning](https://semver.org/). While it’s at 0.x, minor versions (0.2, 0.3…) add features and patch versions (0.1.1) fix bugs.
+## Releases
 
-To release:
+Pushing a version tag runs `.github/workflows/release.yml`, which builds a universal macOS app and attaches it to a draft GitHub release. Copies downloaded from there aren't notarized by Apple. The first time you open one, macOS blocks it: go to System Settings, then Privacy & Security, and choose **Open Anyway**. Notarizing needs a paid Apple Developer account.
 
-1. Update `version` in `package.json` and `APP_VERSION` in `app/index.html`.
-2. Move the notes under **Unreleased** in [CHANGELOG.md](CHANGELOG.md) to a new `## [x.y.z] - YYYY-MM-DD` section.
-3. Run `npm run check`.
+To release a version:
+
+1. Update the version in `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` and `APP_VERSION` in `src/app.js`.
+2. Move the changes under **Unreleased** in [CHANGELOG.md](CHANGELOG.md) to a new `## [x.y.z] - date` heading.
+3. Run `npm run check`, which confirms the versions match and runs the logic tests.
 4. Commit, tag and push:
-   ```bash
-   git commit -am "Release v0.1.1"
-   git tag v0.1.1
-   git push && git push --tags
-   ```
 
-GitHub Actions then checks the tag against `package.json`, runs the checks, builds the zip and checksum, and publishes a GitHub release with the changelog notes.
+```bash
+git commit -am "Release v0.2.1"
+git tag v0.2.1
+git push && git push --tags
+```
+
+## How it's built
+
+```
+src/                 the interface: plain HTML, CSS and JavaScript, no build step
+  core.js            durations, outline operations, carry-over, text exports (tested)
+  app.js             the page: outline editor, time budget, settings
+src-tauri/           the desktop shell (Rust)
+  src/lib.rs         reads and writes the data file, backups, folder choice
+tools/check.js       release checks and tests for core.js
+tools/preview.js     serves src/ for the browser preview
+```
+
+The shell gives the page five commands: load, save, check for outside changes, choose a folder, and show the file. The page has no other access to your disk, and the content-security policy blocks network requests.
 
 ## Licence
 
-No licence chosen yet, so all rights are reserved by the author. The bundled fonts are under the SIL Open Font License (`app/fonts/OFL.txt`).
+No licence yet: all rights reserved by the author.
