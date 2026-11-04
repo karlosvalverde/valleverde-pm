@@ -6,8 +6,10 @@ A small desktop planner for project managers, for the step before Odoo. It works
 - **Routines,** like `15m PM Formech`, added to every day.
 - **Tasks:** projects and their time-boxed actions, like `15m FU` or `Icons - 2h`.
 - **Time left:** the durations in your open lines, added up and compared with what remains of your working day.
+- **Projects:** one sheet per project with its to-dos, SPOC, DB, current website, version, task link, deadline, BA, languages involved, goal, sitemap, apps, project schedule and notes.
+- **Mail templates** in English and Spanish that fill in from the project.
 
-Everything is saved to one file on your computer.
+Everything is saved to one file on your computer. Switch between Plan, Projects and Mail with the tabs or ⌘1, ⌘2, ⌘3.
 
 ## Using it
 
@@ -29,6 +31,29 @@ You can also drag a line by the dots to its left.
 - **Done items:** checking every action of a project checks the project, and done projects collect at the bottom.
 - **Moving work:** when a previous day still has open tasks, a banner offers to bring them over. The originals are marked “Moved to …”, so nothing is counted twice. Open goals carry over the same way at the start of a week.
 - **Sharing:** the ⋯ menu copies the day as text, in the same format as the note, or a week summary with the time done per project, ready for entering timesheets in Odoo.
+
+## Projects
+
+New project opens an empty sheet; the list is sorted by deadline and shows how soon each project is due. Any field holding a link or a domain (like `partena.odoo.com`) gets an **Open** button. Archive a project to move it out of the list without deleting it.
+
+**Plan today**, next to a project to-do, adds it to today's plan under the project's name. Checking it off in either place checks both, and it keeps the link when carried over to another day. In the plan, project lines show a **Project** link to their sheet, and the week lists the deadlines that fall in it.
+
+## Mail templates
+
+Write each template in English, Spanish or both, with the parts that change in `{{double braces}}`. Pick a project and these fill in by themselves:
+
+| Placeholder | Filled with |
+|---|---|
+| `{{project}}` | The project name |
+| `{{first_name}}`, `{{contact}}`, `{{spoc_email}}` | The SPOC's first name, full name and email |
+| `{{spoc}}`, `{{db}}`, `{{website}}`, `{{version}}`, `{{task_link}}`, `{{ba}}`, `{{languages}}`, `{{goal}}`, `{{sitemap}}`, `{{apps}}`, `{{schedule}}`, `{{notes}}` | That field of the project |
+| `{{deadline}}`, `{{date}}` | The deadline and today, written out in the email's language |
+| `{{week}}` | This week's number |
+| `{{my_name}}`, `{{signature}}` | Your details from Settings |
+
+Anything else, like `{{next_steps}}`, becomes a blank to fill in, and the preview marks blanks that are still empty. **Copy email** copies the text; **Open in mail app** starts a new email to the SPOC. Very long emails can get cut short by some mail apps on the way, so copy those instead.
+
+**Write an email** on a project sheet opens the templates with that project chosen. If you have a backup from version 0.1, **Import from version 0.1…** in the ⋯ menu adds its templates and projects.
 
 ## Your data
 
@@ -93,7 +118,7 @@ tools/check.js       release checks and tests for core.js
 tools/preview.js     serves src/ for the browser preview
 ```
 
-The shell gives the page five commands: load, save, check for outside changes, choose a folder, and show the file. The page has no other access to your disk, and the content-security policy blocks network requests.
+The shell gives the page six commands: load, save, check for outside changes, choose a folder, show the file, and open a web link or email draft (only `http`, `https` and `mailto` are allowed). The page has no other access to your disk, and the content-security policy blocks network requests.
 
 ## Licence
 

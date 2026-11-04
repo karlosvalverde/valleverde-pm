@@ -1,6 +1,6 @@
 {
   "name": "valleverde-pm",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A local desktop planner for project managers: week goals, routines and time-boxed daily tasks, saved to a file you own.",
   "private": true,
   "type": "module",
@@ -15,6 +15,11 @@
   "devDependencies": {
     "@tauri-apps/cli": "2.12.4"
   },
-  "engines": { "node": ">=18" },
-  "repository": { "type": "git", "url": "https://github.com/karlosvalverde/valleverde-pm.git" }
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/karlosvalverde/valleverde-pm.git"
+  }
 }

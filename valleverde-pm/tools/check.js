@@ -138,5 +138,62 @@ test('week ranges read naturally', () => {
   assert.equal(C.mondayOf('2026-11-08'), '2026-11-02');
 });
 
+test('carried tasks keep their link to the project to-do', () => {
+  const src = L([[0, 'Partena'], [1, 'Icons 2h']]);
+  src[1].ref = { p: 'p1', t: 't1' };
+  const dst = [];
+  C.carryOver(src, dst, '2026-11-05', id);
+  assert.deepEqual({ ...dst[1].ref }, { p: 'p1', t: 't1' });
+});
+test('SPOC gives a name, a first name and an email', () => {
+  assert.equal(C.emailIn('Ana García <ana@partena.be>'), 'ana@partena.be');
+  assert.equal(C.nameIn('Ana García <ana@partena.be>'), 'Ana García');
+  assert.equal(C.nameIn('ana@partena.be'), '');
+});
+test('links are found in project fields', () => {
+  assert.equal(C.linkOf('https://partena.be/fr'), 'https://partena.be/fr');
+  assert.equal(C.linkOf('partena.odoo.com'), 'https://partena.odoo.com');
+  assert.equal(C.linkOf('partena-prod'), '');
+  assert.equal(C.linkOf('ana@partena.be'), '');
+  assert.equal(C.linkOf('Odoo 18.0'), '');
+});
+test('deadlines read as due dates', () => {
+  const t = '2026-11-04';
+  assert.deepEqual({ ...C.dueLabel('2026-11-04', t) }, { text: 'Due today', soon: true });
+  assert.equal(C.dueLabel('2026-11-06', t).text, 'Due Fri 6');
+  assert.equal(C.dueLabel('2026-11-20', t).text, 'Due 20 Nov');
+  assert.deepEqual({ ...C.dueLabel('2026-11-01', t) }, { text: '3 days late', late: true });
+});
+test('templates fill from the project, in the right language', () => {
+  const p = { name: 'Partena', fields: { spoc: 'Ana García <ana@partena.be>', deadline: '2026-11-20', db: 'partena-staging' } };
+  const me = { name: 'Karlos', signature: 'Karlos Valverde\nValleverde' };
+  const en = C.autoValues(p, me, 'en', '2026-11-04');
+  const es = C.autoValues(p, me, 'es', '2026-11-04');
+  assert.equal(en.first_name, 'Ana');
+  assert.equal(en.deadline, '20 November 2026');
+  assert.equal(es.deadline, '20 de noviembre de 2026');
+  assert.equal(en.week, '45');
+  const t = C.STARTER_TEMPLATES.find(x => x.name === 'Deadline reminder');
+  assert.deepEqual([...C.placeholders(t.en.subject + t.en.body)], ['project', 'deadline', 'first_name', 'pending', 'signature']);
+  assert.equal(C.fill(t.es.subject, es), 'Partena: fecha límite el 20 de noviembre de 2026');
+  const parts = C.fillParts('Hi {{first_name}}, {{pending}}', en);
+  assert.deepEqual([...parts.map(x => x.blank || x.text)], ['Hi ', 'Ana', ', ', 'pending']);
+});
+test('mailto keeps line breaks and the address readable', () => {
+  assert.equal(C.mailto('ana@partena.be', 'A & B', 'x\ny'), 'mailto:ana@partena.be?subject=A%20%26%20B&body=x%0Ay');
+});
+test('a version 0.1 backup brings its templates and projects', () => {
+  const backup = { app: 'valleverde-pm', data: {
+    templates: [{ id: 'a', name: 'Status', category: 'Weekly', en: { subject: 'S', body: 'B {{project}}' }, es: { subject: '', body: '' } }, { name: 'Empty' }],
+    projects: [{ id: 'x', name: 'Nemak', client: 'Nemak SA', contactName: 'Luis', contactEmail: 'luis@nemak.com', lang: 'es' }]
+  } };
+  const r = C.importV01(backup, id);
+  assert.equal(r.templates.length, 1);
+  assert.equal(r.templates[0].en.body, 'B {{project}}');
+  assert.equal(r.projects[0].fields.spoc, 'Luis luis@nemak.com');
+  assert.equal(r.projects[0].fields.notes, 'Client: Nemak SA');
+  assert.equal(r.projects[0].lang, 'es');
+});
+
 if (failed) { console.log(`\n${failed} check(s) failed.`); process.exit(1); }
 console.log('\nAll checks passed.');
