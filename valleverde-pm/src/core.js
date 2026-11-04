@@ -140,11 +140,6 @@
       const m = duration(l.text);
       if (l.done) done += m; else left += m;
     }
-    for (const r of day.routines || []) {
-      if (r.skip) continue;
-      const m = duration(r.text);
-      if (r.done) done += m; else left += m;
-    }
     return { left, done };
   }
 
@@ -189,11 +184,12 @@
       const parentOpen = !p.done && !p.moved;
       if (!openKids.length && !(parentOpen && !kids.length)) continue;
       const copies = openKids.map(k => ({ id: newId(), text: k.text, level: 1, done: false, ...(k.ref ? { ref: { ...k.ref } } : {}) }));
-      const existing = groups(dst).find(([ds]) => !dst[ds].done && norm(dst[ds].text) === norm(p.text));
+      const sameProject = (a, b) => a.ref && b.ref && a.ref.p === b.ref.p && !a.ref.t && !b.ref.t;
+      const existing = groups(dst).find(([ds]) => !dst[ds].done && (norm(dst[ds].text) === norm(p.text) || sameProject(dst[ds], p)));
       if (existing && copies.length) {
         dst.splice(existing[1], 0, ...copies);
       } else if (!existing) {
-        dst.splice(firstDoneGroup(dst), 0, { id: newId(), text: p.text, level: 0, done: false }, ...copies);
+        dst.splice(firstDoneGroup(dst), 0, { id: newId(), text: p.text, level: 0, done: false, ...(p.ref ? { ref: { ...p.ref } } : {}) }, ...copies);
       }
       count += openKids.length || 1;
       if (parentOpen) p.moved = dstDate;
@@ -226,15 +222,13 @@
     if (day.end) out.push(`End: ${day.end.replace(/^0/, '')}`);
     const g = (goals || []).filter(x => x.text.trim());
     if (g.length) out.push('', 'Week goals', ...g.map(x => box(x.done) + x.text));
-    const r = (day.routines || []).filter(x => x.text.trim());
-    if (r.length) out.push('', 'Routines', ...r.map(x => box(x.done) + x.text + (x.skip ? ' (skipped)' : '')));
     const L = (day.lines || []).filter(x => x.text.trim());
     if (L.length) out.push('', 'Tasks', ...L.map(x => (x.level ? '    ' : '') + box(x.done) + x.text + (x.moved ? ` (moved to ${fmtShort(x.moved)})` : '')));
     return out.join('\n') + '\n';
   }
 
   // Time done per project for a week, for updating Odoo or any timesheet by hand.
-  function weekSummary(days, monday) {
+  function weekSummary(days, monday, projectName) {
     const out = [`Week of ${DMY.format(parseYmd(monday))}: time done`, ''];
     const totals = new Map();
     let week = 0;
@@ -249,15 +243,12 @@
       };
       const L = day.lines || [];
       for (const [s, e] of groups(L)) {
-        const lbl = label(stripDuration(L[s].text)) || 'Other';
+        const linked = L[s].ref && projectName && projectName(L[s].ref.p);
+        const lbl = linked || label(stripDuration(L[s].text)) || 'Other';
         for (let k = s; k < e; k++) {
           const m = duration(L[k].text);
           if (L[k].done && !L[k].moved && m) add(lbl, m, k === s ? '' : L[k].text.trim());
         }
-      }
-      for (const r of day.routines || []) {
-        const m = duration(r.text);
-        if (r.done && !r.skip && m) add(stripDuration(r.text) || 'Routine', m, '');
       }
       if (!rows.size) continue;
       let total = 0;
@@ -279,22 +270,26 @@
   /* ---------- projects ---------- */
   // The project sheet, in the order of the user's own notes. Keys double as {{placeholders}}.
   const PROJECT_FIELDS = [
-    { key: 'spoc', label: 'SPOC', hint: 'Single point of contact: name and email' },
+    { key: 'spoc', label: 'SPOC', long: true, hint: 'One contact per line: name and email' },
     { key: 'db', label: 'DB', hint: 'Database name or URL' },
     { key: 'website', label: 'Current website', hint: 'https://…' },
     { key: 'version', label: 'Version', hint: 'For example Odoo 18.0' },
     { key: 'task_link', label: 'Task link', hint: 'https://…' },
     { key: 'deadline', label: 'Deadline', type: 'date' },
     { key: 'ba', label: 'BA', hint: 'Business analyst' },
+    { key: 'salesperson', label: 'Salesperson' },
     { key: 'languages', label: 'Languages involved', hint: 'For example ES, EN, FR' },
     { key: 'goal', label: 'Goal', long: true },
-    { key: 'sitemap', label: 'Sitemap', long: true },
+    { key: 'references', label: 'References', long: true, hint: 'Websites and examples to take as a reference' },
     { key: 'apps', label: 'Apps', long: true },
-    { key: 'schedule', label: 'Project schedule', long: true },
+    { key: 'sitemap', label: 'Sitemap', long: true },
     { key: 'notes', label: 'Notes', long: true }
   ];
   const EMAIL_RE = /[^\s<>,;:()"'[\]]+@[^\s<>,;:()"'[\]]+\.[a-z]{2,}/i;
+  const EMAIL_RE_G = new RegExp(EMAIL_RE.source, 'gi');
   const emailIn = s => (EMAIL_RE.exec(s || '') || [''])[0];
+  const emailsIn = s => [...new Set((String(s || '').match(EMAIL_RE_G) || []))];
+  const firstLine = s => (String(s || '').split('\n').find(l => l.trim()) || '').trim();
   const nameIn = s => (s || '').replace(EMAIL_RE, ' ').replace(/[<>()[\],;:]+/g, ' ').replace(/\s+/g, ' ').trim();
   // A link worth opening: a full http(s) URL, or a bare domain like partena.odoo.com.
   function linkOf(s) {
@@ -302,6 +297,45 @@
     if (/^https?:\/\/[^\s]+$/i.test(s)) return s;
     if (!s.includes('@') && /^[\w-]+(\.[\w-]+)+(:\d+)?(\/\S*)?$/.test(s) && /\.[a-z]{2,}(:\d+)?(\/|$)/i.test(s)) return 'https://' + s;
     return '';
+  }
+  const DEFAULT_SCHEDULE = [
+    'Homepage design + design line definition',
+    'Website design',
+    'Content review / adjustments',
+    'Training / Q&A',
+    'Go live'
+  ];
+  const nextNumber = projects => projects.reduce((m, p) => Math.max(m, Number(p.num) || 0), 0) + 1;
+  const scheduleFrom = (names, newId) => names.filter(n => n.trim()).map(text => ({ id: newId(), text: text.trim(), date: '', done: false }));
+  // The first phase not done yet, which is what the project is working toward now.
+  const nextPhase = p => (p.schedule || []).find(x => !x.done && x.text.trim()) || null;
+  function duplicateProject(p, projects, newId) {
+    const copyLine = l => ({ id: newId(), text: l.text, level: l.level, done: false });
+    return {
+      id: newId(), num: nextNumber(projects), name: `${p.name.trim() || 'Untitled project'} (copy)`,
+      archived: false, lang: p.lang, fields: { ...p.fields },
+      schedule: (p.schedule || []).map(x => ({ id: newId(), text: x.text, date: x.date || '', done: false })),
+      todos: (p.todos || []).map(copyLine),
+      copy: {
+        brief: { ...((p.copy && p.copy.brief) || {}) },
+        pages: ((p.copy && p.copy.pages) || []).map(pg => ({
+          id: newId(), name: pg.name, blocks: pg.blocks.map(b => ({ id: newId(), kind: b.kind, label: b.label, text: { ...b.text } }))
+        }))
+      }
+    };
+  }
+  // Finds projects by number ("12", "#12") or by any part of the name.
+  function findProjects(projects, q) {
+    q = norm(q).replace(/^#/, '');
+    if (!q) return projects.slice();
+    const num = /^\d+$/.test(q) ? Number(q) : null;
+    return projects
+      .map(p => {
+        const n = norm(p.name);
+        const score = num !== null && p.num === num ? 0 : n.startsWith(q) ? 1 : n.includes(q) ? 2 : num !== null && String(p.num).startsWith(q) ? 3 : 9;
+        return [score, p];
+      })
+      .filter(([sc]) => sc < 9).sort((a, b) => a[0] - b[0]).map(x => x[1]);
   }
   const daysBetween = (a, b) => Math.round((parseYmd(b) - parseYmd(a)) / 864e5);
   function dueLabel(date, today) {
@@ -342,22 +376,24 @@
     const jan4 = new Date(d.getFullYear(), 0, 4);
     return 1 + Math.round(((d - jan4) / 864e5 - 3 + ((jan4.getDay() + 6) % 7)) / 7);
   }
-  const LONG_DATE = {
-    en: new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'long', year: 'numeric' }),
-    es: new Intl.DateTimeFormat('es-ES', { day: 'numeric', month: 'long', year: 'numeric' })
-  };
-  const AUTO_KEYS = ['project', 'first_name', 'contact', 'spoc_email', 'date', 'week', 'my_name', 'signature'];
+  const LONG_DATE = Object.fromEntries([['en', 'en-GB'], ['es', 'es-ES'], ['fr', 'fr-FR'], ['it', 'it-IT']]
+    .map(([k, loc]) => [k, new Intl.DateTimeFormat(loc, { day: 'numeric', month: 'long', year: 'numeric' })]));
+  const AUTO_KEYS = ['project', 'project_number', 'first_name', 'contact', 'spoc_email', 'schedule', 'date', 'week', 'my_name', 'signature'];
   function autoValues(project, me, lang, today) {
     const f = (project && project.fields) || {};
-    const fmt = s => (isDate(s) ? LONG_DATE[lang === 'es' ? 'es' : 'en'].format(parseYmd(s)) : '');
-    const contact = nameIn(f.spoc);
+    const fmt = s => (isDate(s) ? (LONG_DATE[lang] || LONG_DATE.en).format(parseYmd(s)) : '');
+    const contact = nameIn(firstLine(f.spoc)).replace(/\s+-\s+.*$/, '');
     const v = {
       project: project ? project.name.trim() : '',
-      contact, first_name: contact.split(' ')[0] || '', spoc_email: emailIn(f.spoc),
+      project_number: project && project.num ? String(project.num) : '',
+      contact, first_name: contact.split(' ')[0] || '', spoc_email: emailsIn(f.spoc).join(', '),
+      schedule: ((project && project.schedule) || []).filter(x => x.text.trim())
+        .map(x => `- ${x.text.trim()}${isDate(x.date) ? `: ${fmt(x.date)}` : ''}`).join('\n'),
       date: fmt(today), week: String(isoWeek(today)),
       my_name: (me && me.name || '').trim(), signature: (me && (me.signature || me.name) || '').trim()
     };
     for (const { key } of PROJECT_FIELDS) v[key] = key === 'deadline' ? fmt(f.deadline) : String(f[key] || '').trim();
+    v.spoc = String(f.spoc || '').trim();
     return v;
   }
   const isLongBlank = n => /points|steps|pending|done|planned|risks|summary|details|notes|items|list|agenda|issues|changes|comments|message|body|text/i.test(n);
@@ -365,26 +401,39 @@
     const f = PROJECT_FIELDS.find(x => x.key === n);
     if (f) return f.label;
     if (n === 'spoc_email') return 'SPOC email';
+    if (n === 'project_number') return 'Project number';
+    if (n === 'schedule') return 'Project schedule';
     const t = n.replace(/[._-]+/g, ' ').trim();
     return t.charAt(0).toUpperCase() + t.slice(1);
   };
   const mailto = (to, subject, body) =>
     `mailto:${encodeURIComponent(to || '').replace(/%40/g, '@')}?subject=${encodeURIComponent(subject || '')}&body=${encodeURIComponent(body || '')}`;
 
-  const tpl = (name, en, es) => ({ name, en: { subject: en[0], body: en[1] }, es: { subject: es[0], body: es[1] } });
+  const tpl = (name, en, es, fr, it) => ({
+    name, en: { subject: en[0], body: en[1] }, es: { subject: es[0], body: es[1] },
+    fr: { subject: fr[0], body: fr[1] }, it: { subject: it[0], body: it[1] }
+  });
   const STARTER_TEMPLATES = [
     tpl('Follow-up',
       ['{{project}}: following up', 'Hi {{first_name}},\n\nI’m following up on {{topic}}. Could you let me know where things stand when you have a moment?\n\nThanks,\n{{signature}}'],
-      ['{{project}}: seguimiento', 'Hola {{first_name}}:\n\nTe escribo para hacer seguimiento de {{topic}}. ¿Me puedes indicar cómo va cuando tengas un momento?\n\nGracias,\n{{signature}}']),
+      ['{{project}}: seguimiento', 'Hola {{first_name}}:\n\nTe escribo para hacer seguimiento de {{topic}}. ¿Me puedes indicar cómo va cuando tengas un momento?\n\nGracias,\n{{signature}}'],
+      ['{{project}}\u00a0: suivi', 'Bonjour {{first_name}},\n\nJe reviens vers vous au sujet de {{topic}}. Pourriez-vous me dire où en sont les choses quand vous aurez un moment\u00a0?\n\nMerci,\n{{signature}}'],
+      ['{{project}}: aggiornamento', 'Buongiorno {{first_name}},\n\nLe scrivo per avere un aggiornamento su {{topic}}. Quando ha un momento, potrebbe dirmi a che punto siamo?\n\nGrazie,\n{{signature}}']),
     tpl('Meeting recap',
       ['{{project}}: meeting recap, {{date}}', 'Hi {{first_name}},\n\nThanks for your time today. Here’s what we agreed:\n\n{{points}}\n\nNext steps:\n{{next_steps}}\n\nBest regards,\n{{signature}}'],
-      ['{{project}}: resumen de la reunión del {{date}}', 'Hola {{first_name}}:\n\nGracias por tu tiempo hoy. Esto es lo que acordamos:\n\n{{points}}\n\nPróximos pasos:\n{{next_steps}}\n\nUn saludo,\n{{signature}}']),
+      ['{{project}}: resumen de la reunión del {{date}}', 'Hola {{first_name}}:\n\nGracias por tu tiempo hoy. Esto es lo que acordamos:\n\n{{points}}\n\nPróximos pasos:\n{{next_steps}}\n\nUn saludo,\n{{signature}}'],
+      ['{{project}}\u00a0: compte rendu de la réunion du {{date}}', 'Bonjour {{first_name}},\n\nMerci pour votre temps aujourd’hui. Voici ce que nous avons convenu\u00a0:\n\n{{points}}\n\nProchaines étapes\u00a0:\n{{next_steps}}\n\nBien cordialement,\n{{signature}}'],
+      ['{{project}}: resoconto della riunione del {{date}}', 'Buongiorno {{first_name}},\n\ngrazie per il tempo dedicato oggi. Ecco quanto abbiamo concordato:\n\n{{points}}\n\nProssimi passi:\n{{next_steps}}\n\nCordiali saluti,\n{{signature}}']),
     tpl('Deadline reminder',
       ['{{project}}: deadline on {{deadline}}', 'Hi {{first_name}},\n\nA quick reminder that the deadline for {{project}} is {{deadline}}. To stay on track, we still need:\n\n{{pending}}\n\nThanks,\n{{signature}}'],
-      ['{{project}}: fecha límite el {{deadline}}', 'Hola {{first_name}}:\n\nTe recuerdo que la fecha límite de {{project}} es el {{deadline}}. Para cumplirla, todavía necesitamos:\n\n{{pending}}\n\nGracias,\n{{signature}}']),
+      ['{{project}}: fecha límite el {{deadline}}', 'Hola {{first_name}}:\n\nTe recuerdo que la fecha límite de {{project}} es el {{deadline}}. Para cumplirla, todavía necesitamos:\n\n{{pending}}\n\nGracias,\n{{signature}}'],
+      ['{{project}}\u00a0: échéance le {{deadline}}', 'Bonjour {{first_name}},\n\nPetit rappel\u00a0: l’échéance de {{project}} est fixée au {{deadline}}. Pour la respecter, il nous manque encore\u00a0:\n\n{{pending}}\n\nMerci,\n{{signature}}'],
+      ['{{project}}: scadenza il {{deadline}}', 'Buongiorno {{first_name}},\n\nle ricordo che la scadenza di {{project}} è il {{deadline}}. Per rispettarla, ci servono ancora:\n\n{{pending}}\n\nGrazie,\n{{signature}}']),
     tpl('Ready for review',
       ['{{project}}: ready for your review', 'Hi {{first_name}},\n\n{{what}} is ready for you to review on {{db}}.\n\nCould you test it and send me your feedback by {{review_by}}?\n\nBest regards,\n{{signature}}'],
-      ['{{project}}: listo para tu revisión', 'Hola {{first_name}}:\n\n{{what}} está listo para que lo revises en {{db}}.\n\n¿Puedes probarlo y enviarme tus comentarios antes del {{review_by}}?\n\nUn saludo,\n{{signature}}'])
+      ['{{project}}: listo para tu revisión', 'Hola {{first_name}}:\n\n{{what}} está listo para que lo revises en {{db}}.\n\n¿Puedes probarlo y enviarme tus comentarios antes del {{review_by}}?\n\nUn saludo,\n{{signature}}'],
+      ['{{project}}\u00a0: prêt pour votre validation', 'Bonjour {{first_name}},\n\n{{what}} est prêt à être testé sur {{db}}.\n\nPourriez-vous le vérifier et m’envoyer vos retours d’ici le {{review_by}}\u00a0?\n\nBien cordialement,\n{{signature}}'],
+      ['{{project}}: pronto per la sua revisione', 'Buongiorno {{first_name}},\n\n{{what}} è pronto per essere verificato su {{db}}.\n\nPotrebbe provarlo e inviarmi il suo riscontro entro il {{review_by}}?\n\nCordiali saluti,\n{{signature}}'])
   ];
 
   /* ---------- importing a version 0.1 backup ---------- */
@@ -398,8 +447,8 @@
   function importV01(data, newId) {
     const templates = (findArray(data, 'templates', 0) || [])
       .filter(t => t && typeof t === 'object' && t.name)
-      .map(t => ({ id: newId(), name: String(t.name), en: part(t.en), es: part(t.es) }))
-      .filter(t => t.en.subject || t.en.body || t.es.subject || t.es.body);
+      .map(t => ({ id: newId(), name: String(t.name), en: part(t.en), es: part(t.es), fr: part(t.fr), it: part(t.it) }))
+      .filter(t => ['en', 'es', 'fr', 'it'].some(l => t[l].subject || t[l].body));
     const projects = (findArray(data, 'projects', 0) || [])
       .filter(p => p && typeof p === 'object' && p.name)
       .map(p => {
@@ -408,9 +457,386 @@
         if (spoc) fields.spoc = String(spoc);
         const notes = [p.client && `Client: ${p.client}`, p.code && `Code: ${p.code}`, p.notes].filter(Boolean).join('\n');
         if (notes) fields.notes = String(notes);
-        return { id: newId(), name: String(p.name), archived: !!p.archived, lang: p.lang === 'es' ? 'es' : 'en', fields, todos: [] };
+        return { id: newId(), name: String(p.name), archived: !!p.archived, lang: ['es', 'fr', 'it'].includes(p.lang) ? p.lang : 'en', fields, todos: [] };
       });
     return { templates, projects };
+  }
+
+  /* ---------- languages ---------- */
+  const LANGS = ['en', 'es', 'fr', 'it'];
+  const LANG_NAMES = { en: 'English', es: 'Spanish', fr: 'French', it: 'Italian', de: 'German', nl: 'Dutch', pt: 'Portuguese', ca: 'Catalan', eu: 'Basque', gl: 'Galician', pl: 'Polish', ro: 'Romanian', sv: 'Swedish', da: 'Danish', no: 'Norwegian', fi: 'Finnish', cs: 'Czech', el: 'Greek', tr: 'Turkish', ar: 'Arabic', zh: 'Chinese', ja: 'Japanese' };
+  const langName = c => LANG_NAMES[c] || c.toUpperCase();
+  const NAME_TO_CODE = { english: 'en', ingles: 'en', anglais: 'en', inglese: 'en', spanish: 'es', espanol: 'es', castellano: 'es', espagnol: 'es', spagnolo: 'es', french: 'fr', frances: 'fr', francais: 'fr', francese: 'fr', italian: 'it', italiano: 'it', italien: 'it', german: 'de', aleman: 'de', deutsch: 'de', dutch: 'nl', neerlandes: 'nl', holandes: 'nl', portuguese: 'pt', portugues: 'pt', catalan: 'ca', catala: 'ca' };
+  // "ES, EN, FR" or "Spanish and French" -> ['es', 'en', 'fr'].
+  function parseLanguages(s) {
+    const out = [];
+    for (const w of fold(s).split(/[^a-z]+/)) {
+      const c = w.length === 2 && LANG_NAMES[w] ? w : NAME_TO_CODE[w];
+      if (c && !out.includes(c)) out.push(c);
+    }
+    return out;
+  }
+  // Lowercase, without accents or punctuation: for matching labels in any language.
+  const fold = s => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[’'`]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+
+  /* ---------- projects as Markdown (Apple Notes) ---------- */
+  const SECTION_ALIASES = {
+    todos: ['project todos', 'project to dos', 'project todo', 'todos', 'to dos', 'todo', 'to do', 'tasks', 'project tasks', 'pendientes', 'tareas', 'a faire'],
+    schedule: ['project schedule', 'schedule', 'planning', 'timeline', 'phases', 'cronograma', 'calendario', 'planificacion'],
+    spoc: ['spoc', 'spocs', 'contact', 'contacts', 'client contact', 'contacto', 'contactos'],
+    db: ['db', 'database', 'odoo db', 'odoo database', 'base de datos', 'bd'],
+    website: ['current website', 'website', 'current site', 'web', 'site', 'web actual', 'sitio web', 'url'],
+    version: ['version', 'odoo version', 'odoo'],
+    task_link: ['task link', 'task', 'odoo task', 'task url', 'link', 'tarea'],
+    deadline: ['deadline', 'due date', 'due', 'fecha limite', 'fecha de entrega', 'entrega', 'fecha'],
+    ba: ['ba', 'business analyst', 'analyst', 'analista'],
+    salesperson: ['salesperson', 'sales person', 'salesman', 'saleswoman', 'sales', 'account manager', 'comercial', 'vendedor', 'vendedora'],
+    references: ['references', 'reference', 'referencias', 'referencia', 'inspiration', 'inspiracion', 'benchmarks', 'examples', 'ejemplos'],
+    languages: ['languages involved', 'languages', 'language', 'idiomas', 'idioma'],
+    goal: ['goal', 'goals', 'objective', 'objectives', 'objetivo', 'objetivos'],
+    sitemap: ['sitemap', 'site map', 'pages', 'mapa del sitio', 'mapa web'],
+    apps: ['apps', 'odoo apps', 'modules', 'aplicaciones', 'modulos'],
+    notes: ['notes', 'note', 'notas', 'comments']
+  };
+  const ALIAS = new Map();
+  for (const [k, list] of Object.entries(SECTION_ALIASES)) for (const a of list) ALIAS.set(a, k);
+  const sectionOf = label => ALIAS.get(fold(label).replace(/ s$/, 's')) || null;
+
+  const unescapeMd = s => s.replace(/\\([\\`*_{}[\]()#+\-.!>|~])/g, '$1');
+  // Notes writes bold as **x**, sometimes doubled (****x****); emphasis markers carry no meaning here.
+  const stripInline = s => unescapeMd(String(s).replace(/(?<!\\)\*{2,}/g, '').replace(/__(.+?)__/g, '$1').replace(/(^|\s)\*(\S.*?)\*(?=\s|$)/g, '$1$2'));
+  // [text](url) -> the URL when the text is the URL (or for link fields), otherwise "text (url)".
+  // Notes sometimes links only part of an address: [https://site](https://site).com reads as https://site.com.
+  const mdLinks = (s, preferUrl) => s.replace(/\[([^\]]*)\]\(([^)\s]+)\)/g, (m, t, u) => (preferUrl || !t || t === u ? u : `${t} (${u})`));
+  const DATE_PATTERNS = [
+    [/\b(\d{4})-(\d{1,2})-(\d{1,2})\b/, m => [m[1], m[2], m[3]]],
+    [/\b(\d{1,2})[/.-](\d{1,2})[/.-](\d{4}|\d{2})\b/, m => [m[3].length === 2 ? `20${m[3]}` : m[3], m[2], m[1]]]
+  ];
+  // Finds a date written as 2026-11-13, 13/11/2026, 13.11.2026 or 13-11-26 (day first, as in Europe).
+  function findDate(s) {
+    for (const [re, get] of DATE_PATTERNS) {
+      const m = re.exec(s || '');
+      if (!m) continue;
+      const [y, mo, d] = get(m).map(Number);
+      const dt = new Date(y, mo - 1, d);
+      if (dt.getFullYear() === y && dt.getMonth() === mo - 1 && dt.getDate() === d) return { date: ymd(dt), match: m[0] };
+    }
+    return null;
+  }
+  const fmtSlash = s => { const [y, m, d] = s.split('-'); return `${d}/${m}/${y}`; };
+  const LIST_RE = /^(\s*)(?:[-*+•◦▪]|\d{1,3}[.)])\s+(?:\[( |x|X)\]\s+)?(.*)$/;
+  const BOX_RE = /^(\s*)(?:\[( |x|X)\]|([☐☑✓✔]))\s+(.*)$/;
+  function listItem(line) {
+    let m = LIST_RE.exec(line);
+    if (m) return { indent: m[1].replace(/\t/g, '    ').length, done: /x/i.test(m[2] || ''), text: m[3] };
+    m = BOX_RE.exec(line);
+    if (m) return { indent: m[1].replace(/\t/g, '    ').length, done: /x/i.test(m[2] || '') || /[☑✓✔]/.test(m[3] || ''), text: m[4] };
+    return null;
+  }
+  // "xxx", "?", "-" and "TBD" are placeholders for something not known yet.
+  const PLACEHOLDER = /^(x{2,}|\?+|[-—–]+|tbd|tbc|n\/a|na|pending|pendiente|por definir|a definir|sin definir)$/i;
+  const NO_DATE = /^(no|none|sin|sin fecha|no deadline|pas de date|nessuna)\b/i;
+  const isSeparator = l => /^\s*([—–]+|[-*_]{3,}|(?:[-*_]\s){2,}[-*_])\s*$/.test(l);
+  const isEmptyBullet = l => /^\s*(?:[-*+•]|\d{1,3}[.)])\s*$/.test(l);
+  // A line that starts a section: a heading, a bold label, "Label:" alone, or "Label: value".
+  // List items never do, so an app called "Website" in a list stays an app.
+  function sectionLine(line) {
+    let m = /^\s*#{1,6}\s+(.*?)\s*#*\s*$/.exec(line);
+    if (m) { const t = stripInline(m[1]).replace(/:\s*$/, '').trim(); return { label: t, key: sectionOf(t), rest: '' }; }
+    if (listItem(line)) return null;
+    m = /^\s*\*{2,}(.+?)\*{2,}\s*(:?)\s*(.*)$/.exec(line);
+    if (m) {
+      const colon = /:\s*$/.test(m[1]) || m[2] === ':';
+      const label = stripInline(m[1]).replace(/:\s*$/, '').trim();
+      const key = sectionOf(label);
+      if (key) return { label, key, rest: m[3] };
+      // An unknown bold label with a colon ("SALESPERSON:") still starts a section of its own.
+      if (colon && label.length <= 40) return { label, key: null, rest: m[3] };
+      return null;
+    }
+    m = /^\s*([^:\n]{1,40}?)\s*:\s*(.*)$/.exec(stripInline(line));
+    if (m && sectionOf(m[1]) && !/^https?$/i.test(m[1])) return { label: m[1].trim(), key: sectionOf(m[1]), rest: m[2] };
+    const plain = stripInline(line).trim().replace(/:$/, '');
+    if (plain && plain.length <= 40 && sectionOf(plain)) return { label: plain, key: sectionOf(plain), rest: '' };
+    return null;
+  }
+  const titleParts = t => {
+    t = stripInline(t).trim();
+    let m = /^#(\d{1,6})\s+(.*)$/.exec(t) || /^(\d{1,6})\s*[-–.:)]\s+(.*)$/.exec(t) || /^\[(\d{1,6})\]\s*(.*)$/.exec(t);
+    return m ? { num: Number(m[1]), name: m[2].trim() } : { num: 0, name: t };
+  };
+  // A schedule line: "**Diseño web** - xxx", "Go-Live - 15/12/2026", or a checklist item with a date.
+  function phaseLine(line) {
+    const it = listItem(line);
+    const raw = it ? it.text : line;
+    const bold = /^\s*\*{2,}(.+?)\*{2,}\s*(?:[-–—:]\s*(.*))?$/.exec(raw);
+    let name, value;
+    if (bold) { name = stripInline(bold[1]); value = bold[2] || ''; }
+    else {
+      const m = /^(.+?)\s+[-–—:]\s+(.*)$/.exec(stripInline(raw));
+      if (!m) return null;
+      name = m[1]; value = m[2];
+    }
+    value = stripInline(value).trim();
+    const d = findDate(value);
+    if (!bold && !d && !PLACEHOLDER.test(value)) return null;
+    name = name.replace(/\s{2,}/g, ' ').replace(/[:\s]+$/, '').trim();
+    if (!name || name.length > 80) return null;
+    const rest = d ? value.replace(d.match, '').replace(/^[\s,;:-]+|[\s,;:-]+$/g, '') : PLACEHOLDER.test(value) ? '' : value;
+    return { text: rest ? `${name} (${rest})` : name, date: d ? d.date : '', done: !!(it && it.done) };
+  }
+
+  function parseProjectMarkdown(text, newId) {
+    const lines = String(text || '').replace(/\r\n?|[\u2028\u2029]/g, '\n').replace(/\u00a0/g, ' ').split('\n').map(l => l.replace(/\s+$/, ''));
+    const p = { num: 0, name: '', fields: {}, todos: [], schedule: null, extra: [] };
+    let i = 0;
+    while (i < lines.length && (!lines[i].trim() || isSeparator(lines[i]))) i++;
+    if (i < lines.length) {
+      const h = /^\s*#{1,6}\s+(.*)$/.exec(lines[i]);
+      const s0 = sectionLine(lines[i]);
+      if (h || !s0 || !s0.key) { Object.assign(p, titleParts(h ? h[1] : lines[i])); i++; }
+    }
+    let cur = null;
+    const sections = [];
+    for (; i < lines.length; i++) {
+      const line = lines[i];
+      if (/^\s*!\[[^\]]*\]\([^)]*\)\s*$/.test(line) || isEmptyBullet(line)) continue;
+      if (isSeparator(line)) { cur = null; continue; }
+      const s = sectionLine(line);
+      if (s) {
+        cur = { key: s.key, label: s.label, lines: [] };
+        sections.push(cur);
+        if (s.rest.trim()) cur.lines.push(s.rest);
+        continue;
+      }
+      if (!cur) { cur = { key: null, label: '', lines: [] }; sections.push(cur); }
+      cur.lines.push(line);
+    }
+    const trimBlock = arr => {
+      const a = [];
+      for (const l of arr) if (l.trim() || (a.length && a[a.length - 1].trim())) a.push(l);
+      while (a.length && !a[a.length - 1].trim()) a.pop();
+      return a;
+    };
+    const addPhases = list => { p.schedule = (p.schedule || []).concat(list.map(x => ({ id: newId(), ...x }))); };
+    for (const sec of sections) {
+      const body = trimBlock(sec.lines);
+      const filled = body.filter(l => l.trim());
+      if (sec.key === 'todos') {
+        let base = null;
+        for (const l of filled) {
+          const it = listItem(l) || { indent: 0, done: false, text: l.trim() };
+          if (base === null) base = it.indent;
+          const t = stripInline(mdLinks(it.text, false)).trim();
+          if (t) p.todos.push({ id: newId(), text: t, level: it.indent > base + 1 && p.todos.length ? 1 : 0, done: it.done });
+        }
+      } else if (sec.key === 'schedule' || (!sec.key && !sec.label && filled.length >= 2 && filled.every(phaseLine))) {
+        addPhases(filled.map(l => phaseLine(l) || (() => {
+          const it = listItem(l) || { done: false, text: l.trim() };
+          let t = stripInline(it.text);
+          const d = findDate(t);
+          if (d) t = t.replace(d.match, ' ');
+          t = t.replace(/\s*[-–—:,]?\s*(\?+\s*)?(deadline|fecha( limite)?|date|due)?\s*[:?]*\s*$/i, '').replace(/\s{2,}/g, ' ').trim();
+          return { text: t, date: d ? d.date : '', done: it.done };
+        })()).filter(x => x.text));
+      } else if (sec.key === 'deadline') {
+        const t = stripInline(filled.join(' ')).trim();
+        const d = findDate(t);
+        if (d) p.fields.deadline = d.date;
+        else if (t && !PLACEHOLDER.test(t) && !NO_DATE.test(t)) p.extra.push(`Deadline: ${t}`);
+      } else if (sec.key) {
+        const def = PROJECT_FIELDS.find(f => f.key === sec.key) || {};
+        const url = sec.key === 'website' || sec.key === 'task_link' || sec.key === 'db';
+        let v;
+        if (def.long) {
+          // Keep lists and their indentation; drop bold markers and links' duplicate text.
+          v = body.map(l => stripInline(mdLinks(l, sec.key === 'references'))).join('\n');
+          if (sec.key === 'spoc' || sec.key === 'references') v = v.split('\n').map(l => { const it = listItem(l); return it ? it.text : l; }).join('\n');
+        } else {
+          const parts = filled.map(l => { const it = listItem(l); return stripInline(mdLinks(it ? it.text : l, url)).trim(); }).filter(Boolean);
+          v = parts.join(filled.every(l => listItem(l)) ? ', ' : ' ');
+        }
+        v = v.trim();
+        if (!v || PLACEHOLDER.test(v)) continue;
+        if (sec.key === 'notes') p.extra.unshift(v);
+        else if (p.fields[sec.key]) p.fields[sec.key] += (def.long ? '\n' : ' ') + v;
+        else p.fields[sec.key] = v;
+      } else {
+        const v = body.map(l => stripInline(mdLinks(l, false))).join('\n').trim();
+        if (v) p.extra.push(sec.label ? `${sec.label}:\n${v}` : v);
+      }
+    }
+    if (p.extra.length) p.fields.notes = p.extra.join('\n\n');
+    delete p.extra;
+    return p;
+  }
+
+  // Written the way the user's own notes look, with two trailing spaces where Notes keeps line breaks,
+  // so the file imports into Notes as a familiar note and reads back into the app unchanged.
+  function projectToMarkdown(p) {
+    const f = p.fields || {};
+    const out = [];
+    const br = l => `${l}  `;
+    // Asterisks in the user's own text are escaped, so Notes doesn't read them as bold or italics.
+    const block = (label, value) => {
+      const v = String(value || '').trim().replace(/\*/g, '\\*');
+      const lines = v ? v.split('\n') : [];
+      const single = !PROJECT_FIELDS.find(x => x.label === label && x.long) && lines.length <= 1;
+      if (single) out.push(br(`**${label}:** ${v || '-'}`));
+      else { out.push(br(`**${label}:**`)); for (const l of (lines.length ? lines : ['-'])) out.push(listItem(l) ? l : br(l)); out.push(''); }
+    };
+    out.push(br(`**#${p.num} ${p.name.trim() || 'Untitled project'}**`), br('—'), '');
+    for (const fd of PROJECT_FIELDS) {
+      if (fd.key === 'apps') break;
+      const v = fd.key === 'deadline' ? (isDate(f.deadline) ? fmtSlash(f.deadline) : '?') : f[fd.key];
+      if (fd.long && out[out.length - 1] !== '') out.push('');
+      block(fd.label, v);
+    }
+    const sched = (p.schedule || []).filter(x => x.text.trim());
+    if (sched.length) {
+      out.push('', br('—'), '');
+      for (const x of sched) out.push(`- [${x.done ? 'x' : ' '}] **${x.text.trim().replace(/\*/g, '\\*')}** - ${isDate(x.date) ? fmtSlash(x.date) : 'xxx'}`);
+      out.push('', br('—'), '');
+    }
+    const todos = (p.todos || []).filter(t => t.text.trim());
+    out.push(br("**Project TODO's:**"));
+    for (const t of todos.length ? todos : [{ text: '', level: 0, done: false }]) out.push(`${t.level ? '    ' : ''}- [${t.done ? 'x' : ' '}] ${t.text.trim().replace(/\*/g, '\\*')}`);
+    out.push('');
+    for (const key of ['apps', 'sitemap', 'notes']) { out.push(''); block(PROJECT_FIELDS.find(x => x.key === key).label, f[key]); }
+    return out.join('\n').replace(/\n{3,}/g, '\n\n').trim() + '\n';
+  }
+  const fileNameFor = (p, suffix) => `${p.num ? `${p.num} ` : ''}${(p.name.trim() || 'Untitled project')}${suffix || ''}`.replace(/[/\\:*?"<>|\u0000-\u001f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120) + '.md';
+
+  /* ---------- asking an AI assistant ---------- */
+  // Claude Desktop, Claude or ChatGPT on the web open with the prompt typed in; anything else gets it copied.
+  const ASSISTANTS = {
+    'claude-desktop': { label: 'Claude', url: q => `claude://claude.ai/new?q=${encodeURIComponent(q)}`, max: 13000 },
+    'claude-web': { label: 'Claude', url: q => `https://claude.ai/new?q=${encodeURIComponent(q)}`, max: 7000, plain: 'https://claude.ai/new' },
+    chatgpt: { label: 'ChatGPT', url: q => `https://chatgpt.com/?q=${encodeURIComponent(q)}`, max: 7000, plain: 'https://chatgpt.com/' },
+    gemini: { label: 'Gemini', url: null, plain: 'https://gemini.google.com/app' },
+    copy: { label: 'your assistant', url: null }
+  };
+  function assistantLink(kind, prompt) {
+    const a = ASSISTANTS[kind] || ASSISTANTS['claude-desktop'];
+    const url = a.url ? a.url(prompt) : '';
+    if (url && url.length <= a.max) return { url, copy: false };
+    return { url: a.plain || '', copy: true };
+  }
+  function reviewPrompt(lang, subject, body, isTemplate) {
+    const L = langName(lang);
+    return [
+      `Please review this ${isTemplate ? 'email template' : 'email'}, written in ${L}, before I send it to a client.`,
+      `- Correct spelling, grammar and punctuation, and make it read naturally to a native ${L} speaker${lang === 'fr' ? ', including French spacing before : ; ? and !' : ''}.`,
+      '- Keep a professional, friendly tone. Keep the meaning, names, dates, links and anything in {{double braces}} exactly as they are.',
+      `- Reply with the corrected subject and ${isTemplate ? 'template' : 'email'} first, ready to copy, then a short list of what you changed and why.`,
+      '', `Subject: ${subject}`, '', body
+    ].join('\n');
+  }
+
+  /* ---------- website copy ---------- */
+  const COPY_KINDS = [
+    { key: 'headline', label: 'Headline', hint: 'About 70 characters at most' },
+    { key: 'subheadline', label: 'Subheadline', hint: 'One or two sentences' },
+    { key: 'body', label: 'Body text' },
+    { key: 'cta', label: 'Call to action', hint: 'A few words' },
+    { key: 'list', label: 'List' },
+    { key: 'seo_title', label: 'SEO title', limit: 60 },
+    { key: 'meta', label: 'Meta description', limit: 155 },
+    { key: 'other', label: 'Other' }
+  ];
+  const kindOf = k => COPY_KINDS.find(x => x.key === k) || COPY_KINDS[COPY_KINDS.length - 1];
+  const DEFAULT_BLOCKS = ['headline', 'subheadline', 'body', 'cta', 'seo_title', 'meta'];
+  const BRIEF_FIELDS = [
+    { key: 'audience', label: 'Audience', hint: 'Who the site is for' },
+    { key: 'voice', label: 'Tone of voice', hint: 'For example warm, expert, plain-spoken' },
+    { key: 'messages', label: 'Key messages', hint: 'What every visitor should take away' },
+    { key: 'keywords', label: 'SEO keywords', hint: 'Comma-separated' },
+    { key: 'ctas', label: 'Calls to action', hint: 'For example Book a demo, Request a quote' }
+  ];
+  const newBlock = (kind, newId) => ({ id: newId(), kind, label: kindOf(kind).label, text: {} });
+  const newPage = (name, newId) => ({ id: newId(), name, blocks: DEFAULT_BLOCKS.map(k => newBlock(k, newId)) });
+  // Sitemap lines ("- Home", "  - About us") become page names; markers and numbering are dropped.
+  const sitemapPages = s => String(s || '').split('\n')
+    .map(l => stripInline(mdLinks(l, false)).replace(/^\s*(?:[-*+•◦▪>]|\d{1,3}[.)])?\s*/, '').replace(/\s*[(:].*$/, '').trim())
+    .filter((l, k, a) => l && l.length <= 60 && a.findIndex(x => x.toLowerCase() === l.toLowerCase()) === k);
+
+  function briefLines(project) {
+    const c = project.copy || {}, b = c.brief || {}, f = project.fields || {};
+    const out = [`Project: ${project.name.trim()}`];
+    if ((f.goal || '').trim()) out.push(`Goal: ${f.goal.trim()}`);
+    for (const x of BRIEF_FIELDS) if ((b[x.key] || '').trim()) out.push(`${x.label}: ${b[x.key].trim()}`);
+    if ((f.sitemap || '').trim()) out.push('', 'Site map:', f.sitemap.trim());
+    return out;
+  }
+  const blockSpec = b => { const k = kindOf(b.kind); return `[${b.label.trim() || k.label}]${k.limit ? ` (${k.limit} characters at most)` : k.hint ? ` (${k.hint.toLowerCase()})` : ''}`; };
+  function pagePrompt(project, page, lang, from) {
+    const L = langName(lang);
+    const has = page.blocks.some(b => (b.text[lang] || '').trim());
+    const src = from && page.blocks.some(b => (b.text[from] || '').trim());
+    const intro = src
+      ? `Translate and adapt the copy of one page of a website from ${langName(from)} into ${L}. Write it the way a native ${L} copywriter would, not word for word, and keep the SEO limits.`
+      : has
+        ? `Improve the copy of one page of a website, in ${L}. Keep what works, tighten the rest, and stay within the limits.`
+        : `Write the copy for one page of a website, in ${L}, for a web design project.`;
+    const out = [intro, '', ...briefLines(project), '', `Page: ${page.name.trim() || 'Untitled page'}`, '',
+      'Write these parts. Put each label on its own line in square brackets, exactly as written, with its text below it:'];
+    for (const b of page.blocks) out.push(blockSpec(b));
+    const draftLang = src ? from : has ? lang : null;
+    if (draftLang) {
+      out.push('', `${src ? 'The current copy' : 'The current draft'}, in ${langName(draftLang)}:`);
+      for (const b of page.blocks) { const t = (b.text[draftLang] || '').trim(); if (t) out.push(`[${b.label.trim() || kindOf(b.kind).label}]`, t); }
+    }
+    out.push('', 'Reply with only the labelled parts, nothing before or after them.');
+    return out.join('\n');
+  }
+  // Reads "[Label]" sections from an assistant's answer. Bold, headings and "Label:" forms are accepted too.
+  function parseCopyAnswer(text) {
+    const out = [];
+    let cur = null;
+    for (const raw of String(text || '').replace(/\r\n?/g, '\n').split('\n')) {
+      const l = raw.replace(/^\s*#{1,6}\s*/, '').replace(/^\s*\*\*(.*?)\*\*\s*$/, '$1');
+      const m = /^\s*\[([^\]]{1,60})\]\s*(?:\(.*\))?\s*:?\s*(.*)$/.exec(l);
+      if (m) { cur = { label: m[1].trim(), lines: m[2] ? [m[2]] : [] }; out.push(cur); continue; }
+      if (cur) cur.lines.push(raw);
+    }
+    return out.map(x => ({ label: x.label, text: x.lines.join('\n').trim().replace(/^["“](.*)["”]$/s, '$1') })).filter(x => x.text);
+  }
+  function applyCopyAnswer(page, lang, answer, newId) {
+    let filled = 0, added = 0;
+    for (const part of parseCopyAnswer(answer)) {
+      const key = fold(part.label);
+      let b = page.blocks.find(x => fold(x.label) === key) || page.blocks.find(x => fold(kindOf(x.kind).label) === key);
+      if (!b) {
+        const kind = (COPY_KINDS.find(k => fold(k.label) === key) || { key: 'other' }).key;
+        b = { ...newBlock(kind, newId), label: part.label };
+        page.blocks.push(b);
+        added++;
+      }
+      b.text[lang] = part.text;
+      filled++;
+    }
+    return { filled, added };
+  }
+  function copyDeckMarkdown(project, langs) {
+    const c = project.copy || { pages: [] };
+    const out = [`# Website copy: #${project.num} ${project.name.trim()}`, ''];
+    const b = c.brief || {};
+    const brief = BRIEF_FIELDS.filter(x => (b[x.key] || '').trim());
+    if (brief.length) { out.push('## Brief'); for (const x of brief) out.push(`**${x.label}:** ${b[x.key].trim()}`); out.push(''); }
+    for (const page of c.pages || []) {
+      out.push(`## ${page.name.trim() || 'Untitled page'}`, '');
+      for (const blk of page.blocks) {
+        const label = blk.label.trim() || kindOf(blk.kind).label;
+        if (langs.length === 1) { out.push(`### ${label}`, (blk.text[langs[0]] || '').trim() || '_To write_', ''); continue; }
+        out.push(`### ${label}`);
+        for (const l of langs) out.push(`**${l.toUpperCase()}:** ${(blk.text[l] || '').trim() || '_To write_'}`);
+        out.push('');
+      }
+    }
+    return out.join('\n').replace(/\n{3,}/g, '\n\n').trim() + '\n';
+  }
+  function pageAsText(page, lang) {
+    return page.blocks.filter(b => (b.text[lang] || '').trim()).map(b => `${b.label.trim() || kindOf(b.kind).label}\n${b.text[lang].trim()}`).join('\n\n') + '\n';
   }
 
   root.Core = {
@@ -419,8 +845,14 @@
     groupStart, groupEnd, groups, firstDoneGroup, normalize, toggle, moveBlock, dropBlock,
     dayMinutes, available, groupMinutes, openCount, carryOver,
     label, goalKey, goalMatch, dayAsText, weekSummary,
-    PROJECT_FIELDS, emailIn, nameIn, linkOf, daysBetween, dueLabel,
+    PROJECT_FIELDS, emailIn, emailsIn, firstLine, nameIn, linkOf,
+    DEFAULT_SCHEDULE, nextNumber, scheduleFrom, nextPhase, duplicateProject, findProjects, daysBetween, dueLabel,
     placeholders, fill, fillParts, isoWeek, AUTO_KEYS, autoValues, isLongBlank, humanize, mailto,
-    STARTER_TEMPLATES, importV01
+    STARTER_TEMPLATES, importV01,
+    LANGS, LANG_NAMES, langName, parseLanguages, fold,
+    parseProjectMarkdown, projectToMarkdown, fileNameFor, findDate,
+    ASSISTANTS, assistantLink, reviewPrompt,
+    COPY_KINDS, kindOf, DEFAULT_BLOCKS, BRIEF_FIELDS, newBlock, newPage, sitemapPages,
+    pagePrompt, parseCopyAnswer, applyCopyAnswer, copyDeckMarkdown, pageAsText
   };
 })(globalThis);
