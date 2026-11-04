@@ -1,33 +1,47 @@
+# Builds the macOS app when you push a version tag (for example v0.2.0)
+# and attaches it to a draft GitHub release. The app is ad-hoc signed, not notarized.
 name: Release
 
-# Runs when you push a version tag, e.g. git tag v0.1.0 && git push --tags
 on:
   push:
-    tags: ['v*.*.*']
+    tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  release:
+  check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Tag matches package.json
-        run: |
-          PKG="v$(node -p "require('./package.json').version")"
-          if [ "$PKG" != "$GITHUB_REF_NAME" ]; then
-            echo "Tag $GITHUB_REF_NAME doesn't match package.json ($PKG)"; exit 1
-          fi
       - run: npm run check
-      - run: npm run build
-      - run: node tools/release-notes.js "$GITHUB_REF_NAME" > notes.md
-      - name: Publish GitHub release
+
+  macos:
+    needs: check
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+      - run: npm ci
+      - uses: tauri-apps/tauri-action@v0
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create "$GITHUB_REF_NAME" dist/*.zip dist/*.sha256 \
-            --title "Valleverde PM $GITHUB_REF_NAME" --notes-file notes.md
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Valleverde PM ${{ github.ref_name }}'
+          releaseBody: 'See CHANGELOG.md for what changed. The app isn’t notarized by Apple: the first time you open it, go to System Settings, then Privacy & Security, and choose Open Anyway.'
+          releaseDraft: true
+          args: --target universal-apple-darwin

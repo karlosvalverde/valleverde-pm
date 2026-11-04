@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Valleverde PM</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <div class="app" id="app" hidden>
+    <nav class="top" aria-label="Day">
+      <div class="daynav">
+        <button type="button" class="icon" data-act="prev" aria-label="Previous day" title="Previous day (←)">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3 5 8l5 5"/></svg>
+        </button>
+        <button type="button" class="icon" data-act="next" aria-label="Next day" title="Next day (→)">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m6 3 5 5-5 5"/></svg>
+        </button>
+      </div>
+      <div class="when">
+        <h1 id="date"></h1>
+        <span class="rel" id="rel"></span>
+      </div>
+      <button type="button" class="btn ghost small" data-act="today" id="todayBtn" title="Go to today (T)">Today</button>
+      <button type="button" class="save-error" id="saveState" data-act="retry-save" hidden>Not saved</button>
+      <div class="menu-wrap">
+        <button type="button" class="icon" data-act="menu" aria-haspopup="menu" aria-expanded="false" aria-label="More">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="3.5" cy="8" r="1.2"/><circle cx="8" cy="8" r="1.2"/><circle cx="12.5" cy="8" r="1.2"/></svg>
+        </button>
+        <div class="menu" id="menu" role="menu" hidden>
+          <button type="button" role="menuitem" data-act="copy-day">Copy day as text</button>
+          <button type="button" role="menuitem" data-act="copy-week">Copy week summary</button>
+          <hr>
+          <button type="button" role="menuitem" data-act="settings">Settings</button>
+        </div>
+      </div>
+    </nav>
+
+    <p class="notice" id="notice" role="alert" hidden></p>
+
+    <header class="budget" aria-label="Time budget">
+      <div class="figures">
+        <p class="left" id="left"></p>
+        <p class="slack" id="slack" aria-live="polite"></p>
+      </div>
+      <div class="ribbon" id="ribbon" aria-hidden="true"></div>
+      <div class="frame">
+        <label>Begin <input type="time" id="begin"></label>
+        <label>End <input type="time" id="end"></label>
+        <span class="done-total" id="doneTotal"></span>
+      </div>
+    </header>
+
+    <section class="block" aria-labelledby="h-week">
+      <div class="block-head">
+        <h2 id="h-week">Week goals</h2>
+        <span class="range" id="weekRange"></span>
+      </div>
+      <div id="goalsBanner"></div>
+      <div class="outline" id="goals"></div>
+    </section>
+
+    <section class="block" aria-labelledby="h-rout">
+      <div class="block-head">
+        <h2 id="h-rout">Routines</h2>
+        <button type="button" class="link" data-act="edit-routines" id="routinesBtn">Edit</button>
+      </div>
+      <div class="outline" id="routines"></div>
+      <div class="outline editing" id="routinesEdit" hidden></div>
+    </section>
+
+    <section class="block tasks" aria-labelledby="h-tasks">
+      <div class="block-head">
+        <h2 id="h-tasks">Tasks</h2>
+      </div>
+      <div id="tasksBanner"></div>
+      <div class="outline" id="tasks"></div>
+    </section>
+  </div>
+
+  <dialog id="settings" aria-labelledby="set-title">
+    <form method="dialog" class="sheet">
+      <h2 id="set-title">Settings</h2>
+      <section>
+        <h3>Data file</h3>
+        <p class="path" id="dataPath"></p>
+        <p class="hint" id="dataHint"></p>
+        <div class="actions" id="dataActions">
+          <button type="button" class="btn" data-act="choose-folder">Choose folder…</button>
+          <button type="button" class="btn ghost" data-act="reveal">Show in Finder</button>
+        </div>
+      </section>
+      <section>
+        <h3>Working hours for new days</h3>
+        <div class="pair">
+          <label>Begin <input type="time" id="defBegin"></label>
+          <label>End <input type="time" id="defEnd"></label>
+        </div>
+      </section>
+      <section>
+        <h3>Keyboard</h3>
+        <dl class="keys">
+          <dt><kbd>Return</kbd></dt><dd>New line</dd>
+          <dt><kbd>Tab</kbd> <kbd>Shift</kbd>+<kbd>Tab</kbd></dt><dd>Make a task part of the project above, or a project of its own</dd>
+          <dt><kbd data-mod>⌘</kbd>+<kbd>Return</kbd></dt><dd>Check or uncheck the line</dd>
+          <dt><kbd data-alt>Option</kbd>+<kbd>↑</kbd> <kbd>↓</kbd></dt><dd>Move the line, or the whole project</dd>
+          <dt><kbd>←</kbd> <kbd>→</kbd> <kbd>T</kbd></dt><dd>Previous day, next day, today (when not typing)</dd>
+          <dt><kbd>N</kbd></dt><dd>Add a task (when not typing)</dd>
+        </dl>
+        <p class="hint">Write a duration anywhere in a line, like 15m, 2h or 1h30, and it counts toward the time left.</p>
+      </section>
+      <footer>
+        <span class="version" id="version"></span>
+        <button class="btn" value="close" autofocus>Done</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <dialog id="confirm" aria-labelledby="cf-title">
+    <form method="dialog" class="sheet narrow">
+      <h2 id="cf-title"></h2>
+      <p id="cf-body"></p>
+      <footer>
+        <button class="btn ghost" value="cancel">Cancel</button>
+        <button class="btn ghost" value="b" id="cf-b"></button>
+        <button class="btn" value="a" id="cf-a"></button>
+      </footer>
+    </form>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="core.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
