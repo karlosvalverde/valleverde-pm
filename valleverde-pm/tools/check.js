@@ -28,7 +28,7 @@ for (const f of ['src/core.js', 'src/app.js']) {
 }
 
 console.log('Core');
-const ctx = {};
+const ctx = { TextDecoder, DecompressionStream, Blob, Response };
 vm.createContext(ctx);
 vm.runInContext(read('src/core.js'), ctx);
 const C = ctx.Core;
@@ -182,19 +182,6 @@ test('templates fill from the project, in the right language', () => {
 test('mailto keeps line breaks and the address readable', () => {
   assert.equal(C.mailto('ana@partena.be', 'A & B', 'x\ny'), 'mailto:ana@partena.be?subject=A%20%26%20B&body=x%0Ay');
 });
-test('a version 0.1 backup brings its templates and projects', () => {
-  const backup = { app: 'valleverde-pm', data: {
-    templates: [{ id: 'a', name: 'Status', category: 'Weekly', en: { subject: 'S', body: 'B {{project}}' }, es: { subject: '', body: '' } }, { name: 'Empty' }],
-    projects: [{ id: 'x', name: 'Nemak', client: 'Nemak SA', contactName: 'Luis', contactEmail: 'luis@nemak.com', lang: 'es' }]
-  } };
-  const r = C.importV01(backup, id);
-  assert.equal(r.templates.length, 1);
-  assert.equal(r.templates[0].en.body, 'B {{project}}');
-  assert.equal(r.projects[0].fields.spoc, 'Luis luis@nemak.com');
-  assert.equal(r.projects[0].fields.notes, 'Client: Nemak SA');
-  assert.equal(r.projects[0].lang, 'es');
-});
-
 test('several SPOCs: first one greets, all are addressed', () => {
   const p = { name: 'Mayra', num: 12, fields: { spoc: 'Ravi V. Sadwani <ravi@mayra.es> - functional lead\nJavier Ruiz javier@mayra.es' },
     schedule: [{ text: 'Website design', date: '2026-11-13' }, { text: 'Go live', date: '' }] };
@@ -391,5 +378,141 @@ test('the real export survives a round trip in the same style', () => {
   assert.deepEqual([...back.todos.map(t => `${t.level}${t.done}${t.text}`)], ['0falseSend sitemap', '1trueCheck menus']);
 });
 
+console.log('0.6');
+test('the suggestion library has every template in four languages, in known categories', () => {
+  assert.equal(C.STARTER_TEMPLATES.length, 12);
+  for (const t of C.STARTER_TEMPLATES) {
+    assert.ok(C.TEMPLATE_CATEGORIES.includes(t.cat), t.name);
+    assert.ok(t.about, t.name);
+    for (const l of C.LANGS) {
+      assert.ok(t[l].subject.trim() && t[l].body.trim(), `${t.name} ${l}`);
+      assert.deepEqual([...C.placeholders(t[l].subject + t[l].body)].sort(), [...C.placeholders(t.en.subject + t.en.body)].sort(), `${t.name} ${l} has the same blanks as English`);
+    }
+  }
+});
+test('links in emails: plain text, HTML and editing', () => {
+  const body = 'See [the task]({{task_link}}) or write to [Ana](ana@partena.be).\nSite: https://partena.be.';
+  const v = { task_link: 'https://odoo.example.com/t/12' };
+  const filled = C.fill(body, v);
+  assert.equal(C.plainMail(filled), 'See the task (https://odoo.example.com/t/12) or write to Ana (ana@partena.be).\nSite: https://partena.be.');
+  const html = C.htmlMail(filled);
+  assert.match(html, /<a href="https:\/\/odoo\.example\.com\/t\/12">the task<\/a>/);
+  assert.match(html, /<a href="mailto:ana@partena\.be">Ana<\/a>/);
+  assert.match(html, /<a href="https:\/\/partena\.be">https:\/\/partena\.be<\/a>\./, 'bare addresses become links, without the full stop');
+  assert.match(html, /<br>/);
+  assert.equal(C.plainMail('[https://x.com](https://x.com)'), 'https://x.com');
+  assert.equal(C.plainMail('[Join]({{meeting_link}})'), '[Join]({{meeting_link}})', 'an unfilled address stays visible as a blank');
+  assert.match(C.htmlMail('<b>&</b>'), /&lt;b&gt;&amp;&lt;\/b&gt;/);
+  const hit = C.linkAt(body, 6);
+  assert.deepEqual({ ...hit }, { start: 4, end: 29, label: 'the task', url: '{{task_link}}' });
+  assert.equal(C.linkAt(body, 1), null);
+  assert.equal(C.linkMarkup('A [b]', 'https://x.com'), '[A  b](https://x.com)', 'brackets in the text can’t break the link');
+});
+test('projects are numbered by their place in the list', () => {
+  const ps = [{ id: 'a', num: 1 }, { id: 'b', num: 2, archived: true }, { id: 'c', num: 3 }, { id: 'd', num: 4 }];
+  C.renumberProjects(ps);
+  assert.deepEqual(ps.map(p => p.id + p.num), ['a1', 'c2', 'd3', 'b4'], 'archived projects go after the open ones');
+  C.moveById(ps, 'd', 'a', false);
+  C.renumberProjects(ps);
+  assert.deepEqual(ps.map(p => p.id + p.num), ['d1', 'a2', 'c3', 'b4']);
+  C.moveProjectTo(ps, 'd', 3);
+  assert.deepEqual(ps.map(p => p.id + p.num), ['a1', 'c2', 'd3', 'b4']);
+  C.moveProjectTo(ps, 'c', 99);
+  assert.deepEqual(ps.map(p => p.id + p.num), ['a1', 'd2', 'c3', 'b4']);
+  assert.equal(C.moveProjectTo(ps, 'b', 1), false, 'archived projects keep their place');
+});
+test('templates move within and between categories', () => {
+  const ts = [{ id: 't1', cat: '' }, { id: 't2', cat: 'x' }, { id: 't3', cat: 'x' }, { id: 't4', cat: 'y' }];
+  C.moveTemplate(ts, 't3', { tpl: 't2' }, false);
+  assert.deepEqual(ts.map(t => t.id + t.cat), ['t1', 't3x', 't2x', 't4y']);
+  C.moveTemplate(ts, 't1', { tpl: 't4' }, true);
+  assert.deepEqual(ts.map(t => t.id + t.cat), ['t3x', 't2x', 't4y', 't1y'], 'dropping on a template takes its category');
+  C.moveTemplate(ts, 't1', { cat: 'x' }, false);
+  assert.deepEqual(ts.map(t => t.id + t.cat), ['t1x', 't3x', 't2x', 't4y'], 'dropping on a category puts it first there');
+  C.moveTemplate(ts, 't4', { cat: 'z' }, false);
+  assert.equal(ts.find(t => t.id === 't4').cat, 'z', 'an empty category takes it');
+});
+
+const ICS = read('tools/fixtures/calendar.ics');
+const brussels = (y, mo, d, h, mi) => C.zonedMs({ y, mo, d, h, mi, s: 0 }, 'Europe/Brussels');
+test('time zones: Brussels wall time to UTC, summer and winter', () => {
+  assert.equal(brussels(2026, 11, 4, 10, 0), Date.UTC(2026, 10, 4, 9, 0));
+  assert.equal(brussels(2026, 7, 1, 10, 0), Date.UTC(2026, 6, 1, 8, 0));
+});
+test('a calendar file: events, recurrences, exceptions, moved and cancelled ones', () => {
+  const cal = { id: 'c', ...C.parseIcs(ICS, new Date(2026, 8, 1)) };
+  assert.equal(cal.name, 'Work');
+  assert.ok(!cal.events.some(e => e.t === 'Old one-off'), 'long-past events are dropped');
+  const occ = C.expandCalendar(cal, '2026-11-01', '2026-11-10');
+  // Checked by instant rather than by local day, so the test passes in any time zone.
+  const one = title => occ.find(o => o.title === title);
+  const iso = o => new Date(o.start).toISOString().slice(0, 16);
+  const kickoff = one('Partena kick-off');
+  assert.equal(kickoff.start, Date.UTC(2026, 10, 4, 9, 0));
+  assert.equal(kickoff.end - kickoff.start, 3600e3);
+  assert.equal(C.eventLink(kickoff), 'https://meet.google.com/abc-defg-hij');
+  assert.equal(one('Call, with comma').start, Date.UTC(2026, 10, 4, 14, 0), 'UTC times and escaped commas');
+  const conf = one('Conference');
+  assert.ok(conf.allDay && !conf.busy, 'all-day, free');
+  assert.ok(C.eventsOn(occ, '2026-11-05').includes(conf) && !C.eventsOn(occ, '2026-11-06').includes(conf), 'all-day end date is exclusive');
+  assert.deepEqual([...occ.filter(o => o.title.startsWith('Stand-up')).map(o => `${o.title}@${iso(o)}`)],
+    ['Stand-up (moved)@2026-11-02T11:00', 'Stand-up@2026-11-04T08:15'],
+    'a weekly series from 2020: one occurrence moved, one removed by EXDATE, one cancelled');
+  assert.equal(one('Outlook meeting').start, Date.UTC(2026, 10, 5, 15, 0), 'Windows time zone names are understood');
+  const monthly = [...C.expandCalendar(cal, '2026-09-01', '2027-03-01').filter(o => o.title === 'Monthly review').map(o => new Date(o.start).toISOString().slice(0, 10))];
+  assert.deepEqual(monthly, ['2026-10-01', '2026-11-05', '2026-12-03'], 'first Thursday, three times');
+  assert.ok(occ.some(o => o.title === 'Custom zone' && o.start === Date.UTC(2026, 10, 5, 7, 0)), 'a zone only described in the file, in winter');
+  assert.ok(C.expandCalendar(cal, '2026-07-01', '2026-07-08').some(o => o.title === 'Custom zone' && o.start === Date.UTC(2026, 6, 2, 6, 0)), 'and in summer');
+});
+test('busy time counts overlaps once and only inside the hours asked', () => {
+  const day = new Date(2026, 10, 4).getTime();
+  const at = (h, m) => day + (h * 60 + m) * 60000;
+  const occ = [
+    { allDay: false, busy: true, start: at(10, 0), end: at(11, 0) },
+    { allDay: false, busy: true, start: at(10, 30), end: at(11, 30) },
+    { allDay: false, busy: false, start: at(12, 0), end: at(13, 0) },
+    { allDay: false, busy: true, start: at(9, 0), end: at(9, 45) },
+    { allDay: true, busy: false, sd: '2026-11-04', ed: '2026-11-05' }
+  ];
+  assert.equal(C.busyMinutes(occ, '2026-11-04', 570, 1110), 105);
+  assert.equal(C.busyMinutes(occ, '2026-11-04', 630, 1110), 60);
+  assert.equal(C.eventTime({ allDay: false, start: at(10, 0), end: at(11, 0) }, '2026-11-04'), '10:00–11:00');
+  assert.equal(C.eventTime({ allDay: false, start: at(-2, 0), end: at(1, 0) }, '2026-11-04'), 'Until 01:00');
+});
+test('the copied day lists the agenda', () => {
+  const t = C.dayAsText({ begin: '09:30', end: '18:30', lines: [] }, '2026-11-04', [], '2026-11-04', ['10:00–11:00 Partena kick-off']);
+  assert.match(t, /Agenda\n- 10:00–11:00 Partena kick-off/);
+});
+
+console.log('0.6.2');
+test('meetings are read from what you type', () => {
+  const m = t => { const x = C.parseMeeting(t); return x ? `${x.start}-${x.end} ${x.title}` : null; };
+  assert.equal(m('10:00 Partena kick-off'), '10:00-10:30 Partena kick-off', 'half an hour unless said otherwise');
+  assert.equal(m('10:00–11:30 Steering committee'), '10:00-11:30 Steering committee');
+  assert.equal(m('14:30 1h Call Mayra'), '14:30-15:30 Call Mayra');
+  assert.equal(m('9.30 Stand-up'), '09:30-10:00 Stand-up');
+  assert.equal(m('10h30 - Réunion'), '10:30-11:00 Réunion');
+  assert.equal(m('2:30pm-4pm Workshop'), '14:30-16:00 Workshop');
+  assert.equal(m('11:00-12 Lunch'), '11:00-12:00 Lunch');
+  assert.equal(m('11:00-1 Lunch'), '11:00-13:00 Lunch', 'an end before the start is in the afternoon');
+  assert.equal(m('10:00 a 11:00 Reunión'), '10:00-11:00 Reunión');
+  assert.equal(m('23:45 1h Late call'), '23:45-24:00 Late call', 'a meeting stops at midnight');
+  for (const t of ['15m FU', '2 Mayra', '10 meetings', '25:00 x', '16:00-15:00 x', 'Lunch']) assert.equal(m(t), null, t);
+  assert.deepEqual({ ...C.parseMeetingTime('11:00', 45) }, { start: '11:00', end: '11:45' }, 'a new start keeps the length');
+  assert.equal(C.parseMeetingTime('11:00 Lunch'), null);
+});
+// A real export from Google Calendar is a zip of .ics files, one per calendar.
+const zipTest = (async () => {
+  try {
+    const buf = readFileSync(new URL('tools/fixtures/google-export.zip', root));
+    const files = await C.unzip(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), ['.ics', '.ical']);
+    assert.deepEqual([...files.map(f => f.name)], ['karlos@odoo.com.ics', 'Holidays in Belgium_abc@group.v.calendar.google.com.ics'], 'macOS junk files are skipped');
+    const cal = C.parseIcs(new TextDecoder().decode(files[1].bytes), new Date(2026, 8, 1));
+    assert.equal(cal.name, 'Holidays in Belgium');
+    console.log('  ok  the zip’s calendars inflate and parse');
+  } catch (e) { failed++; console.log(`  FAIL the zip’s calendars inflate and parse\n       ${e.message}`); }
+})();
+
+await zipTest;
 if (failed) { console.log(`\n${failed} check(s) failed.`); process.exit(1); }
 console.log('\nAll checks passed.');

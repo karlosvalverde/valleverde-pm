@@ -17,18 +17,18 @@
       </div>
       <span class="grow"></span>
       <button type="button" class="save-error" id="saveState" data-act="retry-save" hidden>Not saved</button>
-      <div class="menu-wrap">
-        <button type="button" class="icon" data-act="menu" aria-haspopup="menu" aria-expanded="false" aria-label="More">
+      <div class="menu-wrap" id="menuWrap">
+        <button type="button" class="icon" data-act="menu" aria-haspopup="menu" aria-expanded="false" aria-label="Copy the day or the week" title="Copy the day or the week">
           <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="3.5" cy="8" r="1.2"/><circle cx="8" cy="8" r="1.2"/><circle cx="12.5" cy="8" r="1.2"/></svg>
         </button>
         <div class="menu" id="menu" role="menu" hidden>
           <button type="button" role="menuitem" data-act="copy-day">Copy day as text</button>
           <button type="button" role="menuitem" data-act="copy-week">Copy week summary</button>
-          <hr>
-          <button type="button" role="menuitem" data-act="import-v01">Import from version 0.1…</button>
-          <button type="button" role="menuitem" data-act="settings">Settings</button>
         </div>
       </div>
+      <button type="button" class="icon" data-act="settings" aria-label="Settings" title="Settings (⌘,)">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><circle class="hole" cx="8" cy="8" r="2.2"/><path d="M8 1.6v1.8M8 12.6v1.8M1.6 8h1.8M12.6 8h1.8M3.5 3.5l1.3 1.3M11.2 11.2l1.3 1.3M3.5 12.5l1.3-1.3M11.2 4.8l1.3-1.3"/></svg>
+      </button>
     </nav>
 
     <p class="notice" id="notice" role="alert" hidden></p>
@@ -59,9 +59,20 @@
       <div class="frame">
         <label>Begin <input type="time" id="begin"></label>
         <label>End <input type="time" id="end"></label>
+        <span class="meet-total" id="meetTotal"></span>
         <span class="done-total" id="doneTotal"></span>
       </div>
     </header>
+
+    <section class="block agenda" aria-labelledby="h-agenda" id="agendaBlock">
+      <div class="block-head">
+        <h2 id="h-agenda">Agenda</h2>
+        <span class="range" id="agendaInfo"></span>
+        <button type="button" class="link" data-act="cal-add" id="calConnectBtn" title="Show events from Google Calendar, Outlook, iCloud or a calendar file">Connect a calendar</button>
+        <button type="button" class="link" data-act="cal-refresh" id="calRefreshBtn" title="Get the latest from your calendars">Refresh</button>
+      </div>
+      <div id="agenda"></div>
+    </section>
 
     <section class="block" aria-labelledby="h-week">
       <div class="block-head">
@@ -101,10 +112,9 @@
           <button type="button" class="link danger" data-act="project-delete">Delete</button>
         </div>
         <div class="ptitle-row">
-          <label class="pnum-edit" title="Project number">#<input id="pNum" inputmode="numeric" aria-label="Project number" autocomplete="off" spellcheck="false"></label>
+          <label class="pnum-edit">#<input id="pNum" inputmode="numeric" aria-label="Place in the project list" autocomplete="off" spellcheck="false"></label>
           <input class="ptitle" id="pName" placeholder="Project name" aria-label="Project name" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
         </div>
-        <p class="pnum-note" id="pNumNote" role="status"></p>
         <p class="psub" id="pSub"></p>
         <div class="seg sheet-tabs" role="tablist" aria-label="Project sections">
           <button type="button" role="tab" data-act="sheet-tab" data-tab="project" id="st-project" aria-controls="sheetProject">Project</button>
@@ -132,6 +142,7 @@
       <section id="mailList">
         <div class="view-head">
           <h1>Mail templates</h1>
+          <button type="button" class="btn ghost" data-act="cat-new">New category</button>
           <button type="button" class="btn" data-act="tpl-new">New template</button>
         </div>
         <div id="tplItems"></div>
@@ -149,7 +160,7 @@
       </section>
     </main>
   </div>
-  <input type="file" id="importFile" accept=".json,application/json" hidden>
+  <input type="file" id="icsFile" hidden>
   <input type="file" id="mdFiles" accept=".md,.markdown,.txt,text/markdown,text/plain" multiple hidden>
 
   <dialog id="mdImport" aria-labelledby="mi-title">
@@ -180,6 +191,10 @@
       </footer>
     </form>
   </dialog>
+  <div class="picker suggest" id="suggest" hidden>
+    <p class="pick-head" id="suggestHead"></p>
+    <div class="pick-list" id="suggestList" role="listbox" aria-labelledby="suggestHead"></div>
+  </div>
   <div class="picker" id="picker" role="dialog" aria-labelledby="pickHead" hidden>
     <p class="pick-head" id="pickHead"></p>
     <input id="pickQ" role="combobox" aria-controls="pickList" aria-expanded="true" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
@@ -197,6 +212,16 @@
           <button type="button" class="btn" data-act="choose-folder">Choose folder…</button>
           <button type="button" class="btn ghost" data-act="reveal">Show in Finder</button>
         </div>
+      </section>
+      <section>
+        <h3>Calendars</h3>
+        <div id="calList"></div>
+        <div class="actions">
+          <button type="button" class="btn" data-act="cal-add">Add a calendar…</button>
+          <button type="button" class="btn ghost" data-act="cal-file">Import a calendar file…</button>
+        </div>
+        <label class="check"><input type="checkbox" id="meetingsInBudget"> Take meetings out of the free time in the plan</label>
+        <p class="hint">Your agenda shows in the plan, read-only. Calendars added by address refresh every 15 minutes while the app is open. A calendar file (.ics, .ical, or the .zip Google Calendar exports) shows the events it had when you imported it; import it again to update it. You can also type your own meetings in the plan’s Agenda.</p>
       </section>
       <section>
         <h3>Your details for emails</h3>
@@ -243,19 +268,72 @@
           <dt><kbd data-alt>Option</kbd>+<kbd>↑</kbd> <kbd>↓</kbd></dt><dd>Move the line, or the whole project</dd>
           <dt><kbd>←</kbd> <kbd>→</kbd> <kbd>T</kbd></dt><dd>Previous day, next day, today (when not typing)</dd>
           <dt><kbd>N</kbd></dt><dd>Add a task (when not typing)</dd>
+          <dt>Agenda</dt><dd>Type a meeting as “10:00 Partena kick-off”, “10:00–11:30 Steering” or “14:30 1h Call”, then Return</dd>
+          <dt><kbd>↑</kbd> <kbd>↓</kbd> <kbd>Return</kbd></dt><dd>On an empty project line, pick a project from the list; under a linked project, pick one of its to-dos. Esc closes the list and keeps your text</dd>
           <dt><kbd data-mod>⌘</kbd>+<kbd>L</kbd></dt><dd>Link a task to a project or one of its to-dos</dd>
+          <dt><kbd data-mod>⌘</kbd>+<kbd>K</kbd></dt><dd>Add or change a link, while writing an email</dd>
+          <dt><kbd>↑</kbd> <kbd>↓</kbd> on the dots</dt><dd>Move a project or a template up or down the list</dd>
           <dt><kbd data-mod>⌘</kbd>+<kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></dt><dd>Plan, Projects, Mail</dd>
         </dl>
         <p class="hint">Write a duration anywhere in a line, like 15m, 2h or 1h30, and it counts toward the time left.</p>
       </section>
-      <section>
-        <h3>Version 0.1 data</h3>
-        <p class="hint">If you saved a backup from version 0.1, its mail templates and projects can be added here. Nothing you already have is replaced.</p>
-        <div class="actions"><button type="button" class="btn ghost" data-act="import-v01">Import a backup…</button></div>
-      </section>
       <footer>
         <span class="version" id="version"></span>
         <button class="btn" value="close" autofocus>Done</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <dialog id="tplPick" class="wide" aria-labelledby="tp-title">
+    <form method="dialog" class="sheet">
+      <h2 id="tp-title">New template</h2>
+      <p class="hint">Start from a suggestion, written in English, Spanish, French and Italian, or from a blank page. Suggestions go into a category of the same name, which you can rename.</p>
+      <div class="tp-grid">
+        <div class="tp-list" id="tpList" role="listbox" aria-label="Templates"></div>
+        <div class="tp-preview" id="tpPreview" aria-live="polite"></div>
+      </div>
+      <footer>
+        <button class="btn ghost" value="cancel">Cancel</button>
+        <button type="button" class="btn" data-act="tp-use" id="tpUse">Use this template</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <dialog id="linkDlg" aria-labelledby="ld-title">
+    <form method="dialog" class="sheet narrow">
+      <h2 id="ld-title">Add a link</h2>
+      <div class="stack">
+        <label class="ef">Text to show<input id="ldText" autocomplete="off" spellcheck="false"></label>
+        <label class="ef">Address<input id="ldUrl" placeholder="https://…" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></label>
+      </div>
+      <p class="hint" id="ldHint"></p>
+      <footer>
+        <button type="button" class="link danger" data-act="link-remove" id="ldRemove">Remove the link</button>
+        <span class="grow"></span>
+        <button class="btn ghost" value="cancel">Cancel</button>
+        <button type="button" class="btn" data-act="link-apply" id="ldGo">Add link</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <dialog id="calAdd" aria-labelledby="ca-title">
+    <form method="dialog" class="sheet narrow">
+      <h2 id="ca-title">Add a calendar</h2>
+      <p class="hint">Paste the calendar’s secret address in iCal format. The app reads it to show your meetings; it never changes your calendar.</p>
+      <details class="how">
+        <summary>Where to find it</summary>
+        <p><b>Google Calendar:</b> on the web, open Settings, choose the calendar under Settings for my calendars, then copy Secret address in iCal format. Company accounts often don’t have it: then choose Import &amp; export, then Export, and import the .zip it downloads with Import a calendar file.</p>
+        <p><b>Outlook and Microsoft 365:</b> on the web, open Settings, then Calendar, then Shared calendars. Under Publish a calendar, choose the calendar and Can view all details, choose Publish, then copy the ICS link.</p>
+        <p><b>iCloud:</b> in the Calendar app on the web or on a Mac, share the calendar as a public calendar and copy its address. Anyone with that address can see the events.</p>
+      </details>
+      <div class="stack">
+        <label class="ef">Address<input id="caUrl" placeholder="https://… or webcal://…" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></label>
+        <label class="ef">Name <input id="caName" placeholder="For example Work" autocomplete="off" spellcheck="false"></label>
+      </div>
+      <p class="hint" id="caState" aria-live="polite"></p>
+      <footer>
+        <button class="btn ghost" value="cancel">Cancel</button>
+        <button type="button" class="btn" data-act="cal-save" id="caGo">Add calendar</button>
       </footer>
     </form>
   </dialog>

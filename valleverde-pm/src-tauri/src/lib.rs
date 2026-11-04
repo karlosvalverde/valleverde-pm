@@ -6,7 +6,7 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, UNIX_EPOCH};
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
@@ -14,6 +14,7 @@ const DATA_FILE: &str = "valleverde.json";
 const BACKUP_DIR: &str = "backups";
 const BACKUP_PREFIX: &str = "valleverde-";
 const KEEP_BACKUPS: usize = 30;
+const MAX_CALENDAR_BYTES: u64 = 25 * 1024 * 1024;
 
 /// Remembered between launches, in the app's config folder.
 #[derive(Default, Serialize, Deserialize)]
@@ -381,6 +382,73 @@ async fn save_text_files(app: AppHandle, files: Vec<TextFile>) -> Result<Option<
     Ok(Some(dir.display().to_string()))
 }
 
+/// A calendar's secret address, as https. webcal:// (what iCloud and Outlook hand out) is https underneath.
+fn calendar_url(url: &str) -> Result<String, String> {
+    let url = url.trim();
+    let lower = url.to_ascii_lowercase();
+    let fixed = if let Some(rest) = lower.strip_prefix("webcals://").map(|_| &url["webcals://".len()..]) {
+        format!("https://{rest}")
+    } else if let Some(rest) = lower.strip_prefix("webcal://").map(|_| &url["webcal://".len()..]) {
+        format!("https://{rest}")
+    } else {
+        url.to_string()
+    };
+    let ok = fixed.to_ascii_lowercase().starts_with("https://")
+        && fixed.len() > "https://".len()
+        && fixed.len() <= 4096
+        && !fixed.chars().any(|c| c.is_control() || c.is_whitespace());
+    if ok {
+        Ok(fixed)
+    } else {
+        Err("Use the calendar's secret address, starting with https:// or webcal://.".into())
+    }
+}
+
+/// Reads a calendar from its secret address. This is the app's only network request: the page itself
+/// can't reach the network, and nothing is sent except the request for the address you added.
+#[tauri::command]
+async fn fetch_calendar(url: String) -> Result<String, String> {
+    let url = calendar_url(&url)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .https_only(true)
+            .max_redirects(5)
+            .timeout_global(Some(Duration::from_secs(30)))
+            .user_agent(concat!("ValleverdePM/", env!("CARGO_PKG_VERSION")))
+            .tls_config(
+                ureq::tls::TlsConfig::builder()
+                    .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+                    .build(),
+            )
+            .build()
+            .into();
+        let mut resp = agent.get(&url).call().map_err(|e| match e {
+            ureq::Error::StatusCode(404) | ureq::Error::StatusCode(410) => {
+                "That address wasn't found. If you reset the secret address, copy the new one.".to_string()
+            }
+            ureq::Error::StatusCode(401) | ureq::Error::StatusCode(403) => {
+                "The calendar refused the request. Check that it's the secret address, and that sharing is allowed for your account.".to_string()
+            }
+            ureq::Error::StatusCode(code) => format!("The calendar server answered with error {code}."),
+            ureq::Error::Timeout(_) => "The calendar took too long to answer. Try again later.".to_string(),
+            ureq::Error::HostNotFound => "Couldn't reach the calendar. Check your internet connection.".to_string(),
+            other => format!("Couldn't reach the calendar ({other})."),
+        })?;
+        let text = resp
+            .body_mut()
+            .with_config()
+            .limit(MAX_CALENDAR_BYTES)
+            .read_to_string()
+            .map_err(|e| format!("Couldn't read the calendar ({e})."))?;
+        if !text.trim_start_matches('\u{feff}').trim_start().starts_with("BEGIN:VCALENDAR") {
+            return Err("That address didn't return a calendar. Use the address in iCal format.".into());
+        }
+        Ok(text)
+    })
+    .await
+    .map_err(err)?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -395,7 +463,8 @@ pub fn run() {
             reveal_data_file,
             open_external,
             save_text_file,
-            save_text_files
+            save_text_files,
+            fetch_calendar
         ])
         .run(tauri::generate_context!())
         .expect("error while running Valleverde PM");
@@ -431,6 +500,23 @@ mod tests {
         assert_eq!(unused_path(&dir, "A.md"), dir.join("A 2.md"));
         assert_eq!(unused_path(&dir, "B.md"), dir.join("B.md"));
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn calendar_addresses_are_https() {
+        assert_eq!(
+            calendar_url("webcal://p01-caldav.icloud.com/published/2/abc").unwrap(),
+            "https://p01-caldav.icloud.com/published/2/abc"
+        );
+        assert_eq!(calendar_url(" WEBCAL://x.com/a.ics ").unwrap(), "https://x.com/a.ics");
+        assert_eq!(
+            calendar_url("https://calendar.google.com/calendar/ical/x%40gmail.com/private-abc/basic.ics").unwrap(),
+            "https://calendar.google.com/calendar/ical/x%40gmail.com/private-abc/basic.ics"
+        );
+        assert!(calendar_url("http://x.com/a.ics").is_err());
+        assert!(calendar_url("file:///etc/passwd").is_err());
+        assert!(calendar_url("https://").is_err());
+        assert!(calendar_url("https://x.com/a b.ics").is_err());
     }
 
     #[test]

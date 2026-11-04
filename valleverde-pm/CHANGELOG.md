@@ -5,6 +5,61 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-11-04
+
+### Added
+- **Your own meetings, typed in the plan.** The Agenda has an “Add a meeting” line: write `10:00 Partena kick-off`, `10:00–11:30 Steering committee` or `14:30 1h Call Mayra` and press Return. Without a length, a meeting lasts 30 minutes.
+  - They show with any imported calendar, in time order, with their own colour, and count against the free time like other meetings.
+  - Typing a project's name after the time offers to link the meeting to it, as in the task list; the project shows next to the meeting.
+  - Click a time or a title to change it; the agenda re-sorts. Clearing a title and pressing Backspace, or **Remove**, deletes the meeting.
+  - A Meet, Teams or Zoom link in the title gets a **Join** button. **Copy day as text** lists them.
+  - They're one-off meetings, saved in your data file, so they follow you to your other Mac.
+- **Calendar files from anywhere:** **Import a calendar file…** now takes `.ics`, `.ical` and other iCalendar files whatever their name ends in, and the `.zip` Google Calendar exports (Settings, then Import & export, then Export), which adds one calendar per file inside it. Files up to 150 MB.
+
+### Changed
+- The Agenda is always in the plan, with **Connect a calendar** in its heading until you add one, instead of a banner.
+- The same event in two calendars, or in a calendar imported twice, shows once.
+- Clear messages when a file isn't a calendar, or when a zip has no calendars in it.
+
+## [0.6.1] - 2026-11-04
+
+### Added
+- **Pick a project as you type in the plan,** like a Many2one in Odoo. On an empty project line, or the “Add a project or task” line, a list of your projects opens. It narrows as you type a name or a number (`#3`), and the first project that starts with what you typed is highlighted.
+  - **Return** or a click picks the project: the line is linked to it, and a new action line opens under it. If the project is already in the day's plan, the action goes under that one instead of adding it twice.
+  - **Create project “…”**, at the end of the list, makes a new project with that name and links the line to it.
+  - **Under a linked project,** an empty action line lists that project's open to-dos. Picking one links the line to it and keeps any duration you typed (`15m logo` becomes `Logo review - 15m`). **Add “…” as a to-do** adds a new one.
+  - **Free text stays free:** nothing is chosen unless it's highlighted, so a line like “Self Learning” stays as you wrote it. **Esc** closes the list and keeps your text. Lines with a duration (`15m FU`) don't open the project list.
+
+## [0.6.0] - 2026-11-04
+
+Your agenda in the plan, links and categories in mail templates, and projects in your own order.
+
+### Added
+- **Calendars.** Your meetings show in an **Agenda** section of the plan, from any calendar that gives a secret address in iCal format (Google Calendar, Outlook and Microsoft 365, iCloud) or from an `.ics` file. Add them in Settings, under Calendars.
+  - Read-only: the app reads your calendar and never changes it.
+  - Recurring events, moved and cancelled occurrences, all-day events and time zones (including Outlook's Windows zone names) are understood.
+  - Meetings in your working hours count against the free time, and show as a blue band under the day ribbon. Turn this off in Settings.
+  - A **Join** button appears on events with a Meet, Teams or Zoom link.
+  - Calendars added by address refresh every 15 minutes while the app is open, and when you come back to it. **Copy day as text** includes the agenda.
+- **Links in emails:** select some text and choose **Link…**, or press ⌘K, in a template or an email. A link is written `[text](address)`; the address can be a web address, an email address or a project detail such as `{{task_link}}`. **Copy email** copies it with clickable links. **Open in mail app** writes them as text with the address in brackets, since mail links can't carry formatting.
+- **Template categories,** which you create, rename, fold and reorder. Templates are dragged by the dots to their left, to a new place or another category, or moved with the arrow keys.
+- **New template** opens a choice of 12 suggested templates, each in English, Spanish, French and Italian, grouped by category (Kick-off, Meeting invitation, Meeting recap, Heads-up, Status update, Delay notice, Change request, Follow-up, Deadline reminder, Ready for review, Wrap-up, Thank you), with a preview in each language. Or start from a blank template.
+- **Emails keep what you write:** the blanks you fill in, the address and any changes to the text are kept per template and project until you clear them. **Change the text of this email** lets you edit the final email directly.
+- A **Settings** button next to the tabs.
+
+### Changed
+- **Projects are in your own order.** Drag a project by its dots, or use the arrow keys; its number is its place in the list, and follows it, including in `{{project_number}}`. Typing a number on a project's sheet moves it there. New, imported and restored projects go to the bottom. Existing projects keep the order of their old numbers.
+- Templates list in your own order instead of by name. Under a template's name, the list shows its first subject, or the start of the email when there's no subject yet.
+- The ⋯ menu only appears in the plan, where it copies the day or the week.
+- The data file is now `schema: 6`.
+
+### Fixed
+- **Edits could be lost when coming back to the window.** If the data file had changed on disk (for example through iCloud Drive) and you typed straight away, the reload replaced what you had just typed. The reload now waits for your typing, only happens when the file really differs, and an older copy put back by a sync service no longer replaces newer data.
+
+### Removed
+- **Import from version 0.1**, in the menu, Settings and the empty template list.
+- The **Sort by** setting of the project list, now that its order is yours.
+
 ## [0.5.1] - 2026-11-04
 
 Markdown import and export adjusted to a real export from Notes on macOS 26.
