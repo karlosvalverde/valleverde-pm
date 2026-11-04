@@ -5,6 +5,30 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-04
+
+Project notes and mail templates are back, inside the desktop app.
+
+### Added
+- **Projects:** a sheet for each project, with its own to-do list and these details: SPOC, DB, current website, version, task link, deadline, BA, languages involved, goal, sitemap, apps, project schedule and notes.
+  - Links and bare domains in a field get an Open button.
+  - The list is sorted by deadline, shows open to-dos and how soon each project is due, and keeps archived projects apart.
+- **Plan today** on a project to-do adds it to today's plan under its project. Checking it in either place checks both, and carry-over keeps the link.
+- **In the plan:** project lines link to their sheet, and the week shows the deadlines that fall in it.
+- **Mail templates** in English and Spanish:
+  - `{{placeholders}}` fill in from the chosen project and your details. For example, `{{first_name}}` and `{{spoc_email}}` come from the SPOC, and `{{deadline}}` is written out in the email's language.
+  - Any other placeholder becomes a blank to fill in, and the preview marks the blanks still empty.
+  - Copy the email or its subject, or open it in your mail app, addressed to the SPOC.
+  - Four example templates to start from, and buttons to insert project details while editing.
+- **Write an email** from a project sheet opens the templates with that project selected.
+- **Import from version 0.1:** adds the templates and projects from a 0.1 backup file, skipping names you already have.
+- **Settings:** your name, signature and default email language.
+- Plan, Projects and Mail views, switched with ⌘1, ⌘2 and ⌘3.
+
+### Changed
+- The data file is now `schema: 3`. Files from 0.2 open as they are; version 0.2 won't edit a file saved by 0.3.
+- The window opens a little wider.
+
 ## [0.2.0] - 2026-11-04
 
 Valleverde PM becomes a local desktop app built with Tauri. It's a planning scratchpad that comes before Odoo, modeled on a daily to-do note.

@@ -188,7 +188,7 @@
       const openKids = kids.filter(k => !k.done && !k.moved);
       const parentOpen = !p.done && !p.moved;
       if (!openKids.length && !(parentOpen && !kids.length)) continue;
-      const copies = openKids.map(k => ({ id: newId(), text: k.text, level: 1, done: false }));
+      const copies = openKids.map(k => ({ id: newId(), text: k.text, level: 1, done: false, ...(k.ref ? { ref: { ...k.ref } } : {}) }));
       const existing = groups(dst).find(([ds]) => !dst[ds].done && norm(dst[ds].text) === norm(p.text));
       if (existing && copies.length) {
         dst.splice(existing[1], 0, ...copies);
@@ -276,11 +276,151 @@
     return out.join('\n') + '\n';
   }
 
+  /* ---------- projects ---------- */
+  // The project sheet, in the order of the user's own notes. Keys double as {{placeholders}}.
+  const PROJECT_FIELDS = [
+    { key: 'spoc', label: 'SPOC', hint: 'Single point of contact: name and email' },
+    { key: 'db', label: 'DB', hint: 'Database name or URL' },
+    { key: 'website', label: 'Current website', hint: 'https://…' },
+    { key: 'version', label: 'Version', hint: 'For example Odoo 18.0' },
+    { key: 'task_link', label: 'Task link', hint: 'https://…' },
+    { key: 'deadline', label: 'Deadline', type: 'date' },
+    { key: 'ba', label: 'BA', hint: 'Business analyst' },
+    { key: 'languages', label: 'Languages involved', hint: 'For example ES, EN, FR' },
+    { key: 'goal', label: 'Goal', long: true },
+    { key: 'sitemap', label: 'Sitemap', long: true },
+    { key: 'apps', label: 'Apps', long: true },
+    { key: 'schedule', label: 'Project schedule', long: true },
+    { key: 'notes', label: 'Notes', long: true }
+  ];
+  const EMAIL_RE = /[^\s<>,;:()"'[\]]+@[^\s<>,;:()"'[\]]+\.[a-z]{2,}/i;
+  const emailIn = s => (EMAIL_RE.exec(s || '') || [''])[0];
+  const nameIn = s => (s || '').replace(EMAIL_RE, ' ').replace(/[<>()[\],;:]+/g, ' ').replace(/\s+/g, ' ').trim();
+  // A link worth opening: a full http(s) URL, or a bare domain like partena.odoo.com.
+  function linkOf(s) {
+    s = (s || '').trim();
+    if (/^https?:\/\/[^\s]+$/i.test(s)) return s;
+    if (!s.includes('@') && /^[\w-]+(\.[\w-]+)+(:\d+)?(\/\S*)?$/.test(s) && /\.[a-z]{2,}(:\d+)?(\/|$)/i.test(s)) return 'https://' + s;
+    return '';
+  }
+  const daysBetween = (a, b) => Math.round((parseYmd(b) - parseYmd(a)) / 864e5);
+  function dueLabel(date, today) {
+    if (!isDate(date)) return null;
+    const d = daysBetween(today, date);
+    if (d < 0) return { text: d === -1 ? '1 day late' : `${-d} days late`, late: true };
+    if (d === 0) return { text: 'Due today', soon: true };
+    if (d === 1) return { text: 'Due tomorrow', soon: true };
+    if (d < 7) return { text: `Due ${fmtShort(date)}`, soon: d < 3 };
+    return { text: `Due ${DM.format(parseYmd(date))}` };
+  }
+
+  /* ---------- mail templates ---------- */
+  const PH = /\{\{\s*([\w.-]+)\s*\}\}/g;
+  function placeholders(s) {
+    const out = [];
+    String(s || '').replace(PH, (m, n) => { if (!out.includes(n)) out.push(n); return m; });
+    return out;
+  }
+  const fill = (s, v) => String(s || '').replace(PH, (all, n) => (v[n] ? v[n] : all));
+  // Splits text into plain and placeholder parts, for previews that highlight what's still blank.
+  function fillParts(s, v) {
+    s = String(s || '');
+    const out = [];
+    let last = 0;
+    String(s || '').replace(PH, (all, n, off) => {
+      if (off > last) out.push({ text: s.slice(last, off) });
+      out.push(v[n] ? { text: v[n] } : { text: all, blank: n });
+      last = off + all.length;
+      return all;
+    });
+    if (last < s.length) out.push({ text: s.slice(last) });
+    return out;
+  }
+  function isoWeek(s) {
+    const d = parseYmd(s);
+    d.setDate(d.getDate() + 3 - ((d.getDay() + 6) % 7));
+    const jan4 = new Date(d.getFullYear(), 0, 4);
+    return 1 + Math.round(((d - jan4) / 864e5 - 3 + ((jan4.getDay() + 6) % 7)) / 7);
+  }
+  const LONG_DATE = {
+    en: new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'long', year: 'numeric' }),
+    es: new Intl.DateTimeFormat('es-ES', { day: 'numeric', month: 'long', year: 'numeric' })
+  };
+  const AUTO_KEYS = ['project', 'first_name', 'contact', 'spoc_email', 'date', 'week', 'my_name', 'signature'];
+  function autoValues(project, me, lang, today) {
+    const f = (project && project.fields) || {};
+    const fmt = s => (isDate(s) ? LONG_DATE[lang === 'es' ? 'es' : 'en'].format(parseYmd(s)) : '');
+    const contact = nameIn(f.spoc);
+    const v = {
+      project: project ? project.name.trim() : '',
+      contact, first_name: contact.split(' ')[0] || '', spoc_email: emailIn(f.spoc),
+      date: fmt(today), week: String(isoWeek(today)),
+      my_name: (me && me.name || '').trim(), signature: (me && (me.signature || me.name) || '').trim()
+    };
+    for (const { key } of PROJECT_FIELDS) v[key] = key === 'deadline' ? fmt(f.deadline) : String(f[key] || '').trim();
+    return v;
+  }
+  const isLongBlank = n => /points|steps|pending|done|planned|risks|summary|details|notes|items|list|agenda|issues|changes|comments|message|body|text/i.test(n);
+  const humanize = n => {
+    const f = PROJECT_FIELDS.find(x => x.key === n);
+    if (f) return f.label;
+    if (n === 'spoc_email') return 'SPOC email';
+    const t = n.replace(/[._-]+/g, ' ').trim();
+    return t.charAt(0).toUpperCase() + t.slice(1);
+  };
+  const mailto = (to, subject, body) =>
+    `mailto:${encodeURIComponent(to || '').replace(/%40/g, '@')}?subject=${encodeURIComponent(subject || '')}&body=${encodeURIComponent(body || '')}`;
+
+  const tpl = (name, en, es) => ({ name, en: { subject: en[0], body: en[1] }, es: { subject: es[0], body: es[1] } });
+  const STARTER_TEMPLATES = [
+    tpl('Follow-up',
+      ['{{project}}: following up', 'Hi {{first_name}},\n\nI’m following up on {{topic}}. Could you let me know where things stand when you have a moment?\n\nThanks,\n{{signature}}'],
+      ['{{project}}: seguimiento', 'Hola {{first_name}}:\n\nTe escribo para hacer seguimiento de {{topic}}. ¿Me puedes indicar cómo va cuando tengas un momento?\n\nGracias,\n{{signature}}']),
+    tpl('Meeting recap',
+      ['{{project}}: meeting recap, {{date}}', 'Hi {{first_name}},\n\nThanks for your time today. Here’s what we agreed:\n\n{{points}}\n\nNext steps:\n{{next_steps}}\n\nBest regards,\n{{signature}}'],
+      ['{{project}}: resumen de la reunión del {{date}}', 'Hola {{first_name}}:\n\nGracias por tu tiempo hoy. Esto es lo que acordamos:\n\n{{points}}\n\nPróximos pasos:\n{{next_steps}}\n\nUn saludo,\n{{signature}}']),
+    tpl('Deadline reminder',
+      ['{{project}}: deadline on {{deadline}}', 'Hi {{first_name}},\n\nA quick reminder that the deadline for {{project}} is {{deadline}}. To stay on track, we still need:\n\n{{pending}}\n\nThanks,\n{{signature}}'],
+      ['{{project}}: fecha límite el {{deadline}}', 'Hola {{first_name}}:\n\nTe recuerdo que la fecha límite de {{project}} es el {{deadline}}. Para cumplirla, todavía necesitamos:\n\n{{pending}}\n\nGracias,\n{{signature}}']),
+    tpl('Ready for review',
+      ['{{project}}: ready for your review', 'Hi {{first_name}},\n\n{{what}} is ready for you to review on {{db}}.\n\nCould you test it and send me your feedback by {{review_by}}?\n\nBest regards,\n{{signature}}'],
+      ['{{project}}: listo para tu revisión', 'Hola {{first_name}}:\n\n{{what}} está listo para que lo revises en {{db}}.\n\n¿Puedes probarlo y enviarme tus comentarios antes del {{review_by}}?\n\nUn saludo,\n{{signature}}'])
+  ];
+
+  /* ---------- importing a version 0.1 backup ---------- */
+  function findArray(o, key, depth) {
+    if (!o || typeof o !== 'object' || depth > 4) return null;
+    if (Array.isArray(o[key])) return o[key];
+    for (const v of Object.values(o)) { const r = findArray(v, key, depth + 1); if (r) return r; }
+    return null;
+  }
+  const part = x => ({ subject: String((x && x.subject) || ''), body: String((x && x.body) || '') });
+  function importV01(data, newId) {
+    const templates = (findArray(data, 'templates', 0) || [])
+      .filter(t => t && typeof t === 'object' && t.name)
+      .map(t => ({ id: newId(), name: String(t.name), en: part(t.en), es: part(t.es) }))
+      .filter(t => t.en.subject || t.en.body || t.es.subject || t.es.body);
+    const projects = (findArray(data, 'projects', 0) || [])
+      .filter(p => p && typeof p === 'object' && p.name)
+      .map(p => {
+        const fields = {};
+        const spoc = [p.contactName || p.contact, p.contactEmail || p.email].filter(Boolean).join(' ');
+        if (spoc) fields.spoc = String(spoc);
+        const notes = [p.client && `Client: ${p.client}`, p.code && `Code: ${p.code}`, p.notes].filter(Boolean).join('\n');
+        if (notes) fields.notes = String(notes);
+        return { id: newId(), name: String(p.name), archived: !!p.archived, lang: p.lang === 'es' ? 'es' : 'en', fields, todos: [] };
+      });
+    return { templates, projects };
+  }
+
   root.Core = {
     pad, isDate, ymd, parseYmd, addDays, mondayOf, fmtLong, fmtShort, fmtDots, fmtRange,
     duration, stripDuration, fmtDur, toMin, isTime,
     groupStart, groupEnd, groups, firstDoneGroup, normalize, toggle, moveBlock, dropBlock,
     dayMinutes, available, groupMinutes, openCount, carryOver,
-    label, goalKey, goalMatch, dayAsText, weekSummary
+    label, goalKey, goalMatch, dayAsText, weekSummary,
+    PROJECT_FIELDS, emailIn, nameIn, linkOf, daysBetween, dueLabel,
+    placeholders, fill, fillParts, isoWeek, AUTO_KEYS, autoValues, isLongBlank, humanize, mailto,
+    STARTER_TEMPLATES, importV01
   };
 })(globalThis);

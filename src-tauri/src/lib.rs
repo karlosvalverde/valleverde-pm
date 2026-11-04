@@ -277,6 +277,32 @@ fn reveal_data_file(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Only web links and new emails can be opened; anything else is refused.
+fn is_openable(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    (lower.starts_with("https://") || lower.starts_with("http://") || lower.starts_with("mailto:"))
+        && !url.chars().any(|c| c.is_control())
+        && url.len() <= 32_000
+}
+
+/// Opens a project link in the browser, or a drafted email in the mail app.
+#[tauri::command]
+fn open_external(url: String) -> Result<(), String> {
+    if !is_openable(&url) {
+        return Err("Only web links and email drafts can be opened.".into());
+    }
+    #[cfg(target_os = "macos")]
+    std::process::Command::new("open").arg(&url).spawn().map_err(err)?;
+    #[cfg(target_os = "windows")]
+    std::process::Command::new("rundll32")
+        .args(["url.dll,FileProtocolHandler", &url])
+        .spawn()
+        .map_err(err)?;
+    #[cfg(all(unix, not(target_os = "macos")))]
+    std::process::Command::new("xdg-open").arg(&url).spawn().map_err(err)?;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -288,7 +314,8 @@ pub fn run() {
             workspace_mtime,
             choose_folder,
             use_folder,
-            reveal_data_file
+            reveal_data_file,
+            open_external
         ])
         .run(tauri::generate_context!())
         .expect("error while running Valleverde PM");
@@ -297,6 +324,17 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_links_and_emails_open() {
+        assert!(is_openable("https://partena.odoo.com/odoo"));
+        assert!(is_openable("mailto:ana@partena.be?subject=Hi&body=a%0Ab"));
+        assert!(!is_openable("file:///etc/passwd"));
+        assert!(!is_openable("/Applications/Calculator.app"));
+        assert!(!is_openable("-a Calculator"));
+        assert!(!is_openable("https://x.com/\nrm"));
+        assert!(!is_openable("https://x.com/\u{0}"));
+    }
 
     #[test]
     fn dates_are_checked() {

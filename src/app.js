@@ -1,8 +1,8 @@
 /* Valleverde PM: the interface. Logic that doesn't touch the page lives in core.js. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.2.0';
-  const SCHEMA = 2;
+  const APP_VERSION = '0.3.0';
+  const SCHEMA = 3;
   const C = globalThis.Core;
 
   const $ = (s, r = document) => r.querySelector(s);
@@ -26,7 +26,8 @@
         mtime: () => invoke('workspace_mtime'),
         chooseFolder: () => invoke('choose_folder'),
         useFolder: (mode, content) => invoke('use_folder', { mode, content, today: today() }),
-        reveal: () => invoke('reveal_data_file')
+        reveal: () => invoke('reveal_data_file'),
+        open: url => invoke('open_external', { url })
       };
     }
     const KEY = 'valleverde-pm-v2';
@@ -34,7 +35,8 @@
       kind: 'browser',
       load: async () => { let c = null; try { c = localStorage.getItem(KEY); } catch {} return { path: null, dir: null, content: c, mtime: 0 }; },
       save: async content => { localStorage.setItem(KEY, content); return 0; },
-      mtime: async () => 0
+      mtime: async () => 0,
+      open: async url => { window.open(url, '_blank', 'noopener'); }
     };
   })();
 
@@ -43,10 +45,18 @@
   let info = { path: null, dir: null };
   let readOnly = '';
   let lastMtime = 0, dirty = false, saveTimer = 0, saving = Promise.resolve();
-  const ui = { date: today(), today: today(), editRoutines: false };
+  const ui = {
+    view: 'plan', date: today(), today: today(), editRoutines: false,
+    project: null,
+    mail: { tpl: null, project: '', lang: null, to: '', toTouched: false, fields: {}, editing: false }
+  };
 
   function blank() {
-    return { app: 'valleverde-pm', schema: SCHEMA, settings: { begin: '09:30', end: '18:30' }, routines: [], weeks: {}, days: {} };
+    return {
+      app: 'valleverde-pm', schema: SCHEMA,
+      settings: { begin: '09:30', end: '18:30', me: { name: '', signature: '', lang: 'en' } },
+      routines: [], weeks: {}, days: {}, projects: [], templates: []
+    };
   }
   function normalizeData(o) {
     const b = blank();
@@ -56,10 +66,25 @@
     const line = x => {
       const l = { id: String(x.id || uid()), text: String(x.text ?? ''), level: x.level === 1 ? 1 : 0, done: !!x.done };
       if (C.isDate(x.moved)) l.moved = x.moved;
+      if (x.ref && typeof x.ref === 'object' && x.ref.p && x.ref.t) l.ref = { p: String(x.ref.p), t: String(x.ref.t) };
+      if (C.isDate(x.planned)) l.planned = x.planned;
       return l;
     };
+    const str = v => (typeof v === 'string' ? v : '');
+    const part = x => ({ subject: str(x && x.subject), body: str(x && x.body) });
     b.settings.begin = time(o.settings && o.settings.begin, b.settings.begin);
     b.settings.end = time(o.settings && o.settings.end, b.settings.end);
+    const me = (o.settings && o.settings.me) || {};
+    b.settings.me = { name: str(me.name), signature: str(me.signature), lang: me.lang === 'es' ? 'es' : 'en' };
+    b.projects = arr(o.projects).map(p => {
+      const fields = {};
+      for (const { key } of C.PROJECT_FIELDS) if (str(p.fields && p.fields[key])) fields[key] = p.fields[key];
+      return {
+        id: String(p.id || uid()), name: str(p.name), archived: !!p.archived, lang: p.lang === 'es' ? 'es' : 'en',
+        fields, todos: C.normalize(arr(p.todos).map(line), 1)
+      };
+    });
+    b.templates = arr(o.templates).map(t => ({ id: String(t.id || uid()), name: str(t.name), en: part(t.en), es: part(t.es) }));
     b.routines = arr(o.routines).map(r => ({ id: String(r.id || uid()), text: String(r.text ?? '') }));
     for (const [k, w] of Object.entries(o.weeks || {})) {
       if (!C.isDate(k) || !w) continue;
@@ -255,7 +280,9 @@
       const L = this.write();
       const i = L.findIndex(l => l.id === id);
       if (i < 0) return;
+      const before = new Map(L.map(l => [l.id, l.done]));
       C.toggle(L, i, this.o.sink);
+      if (this.o.onToggled) this.o.onToggled(L.filter(l => before.get(l.id) !== l.done));
       this.commit(keepFocus ? { id, pos: keepFocus.pos } : null);
     }
     onClick(e) {
@@ -402,7 +429,7 @@
   }
 
   /* ---------- outlines on the page ---------- */
-  let goalsOL, tasksOL, routinesOL;
+  let goalsOL, tasksOL, routinesOL, projTodosOL;
   function onListChange(kind) {
     changed();
     renderBudget();
@@ -430,6 +457,8 @@
         if (l.moved) return `<span class="note">Moved to ${esc(C.fmtShort(l.moved))}</span>`;
         if (l.level) return '';
         let h = '';
+        const p = projectFor(l.text);
+        if (p) h += `<button type="button" class="link plink" data-act="open-project" data-pid="${esc(p.id)}">Project</button>`;
         const g = goalNumber(l.text);
         if (g) h += `<span class="goal" title="Serves week goal ${g}">Goal ${g}</span>`;
         const m = C.groupMinutes(L, i);
@@ -439,7 +468,20 @@
         }
         return h;
       },
+      onToggled: syncFromDay,
       onChange: onListChange
+    });
+    projTodosOL = new Outline($('#pTodos'), {
+      maxLevel: 1, sink: true, label: 'Project to-do', ghost: 'Add a to-do for this project',
+      read: () => (proj(ui.project) || { todos: [] }).todos,
+      write: () => proj(ui.project).todos,
+      decorate: l => {
+        if (l.done) return '';
+        if (l.planned && l.planned >= today()) return `<span class="note">Planned ${esc((relative(l.planned) || C.fmtShort(l.planned)).toLowerCase())}</span>`;
+        return '<button type="button" class="link plan-btn" data-act="plan-todo">Plan today</button>';
+      },
+      onToggled: syncFromTodos,
+      onChange: () => { changed(); renderSheetSub(); }
     });
     routinesOL = new Outline($('#routinesEdit'), {
       maxLevel: 0, check: false, label: 'Routine', ghost: 'Add a routine, like “15m PM Formech”',
@@ -450,15 +492,35 @@
   }
 
   /* ---------- rendering ---------- */
+  const VIEWS = ['plan', 'projects', 'mail'];
   function render() {
-    renderNav();
     renderNotice();
+    for (const v of VIEWS) {
+      $('#view-' + v).hidden = ui.view !== v;
+      $('#tab-' + v).setAttribute('aria-selected', String(ui.view === v));
+    }
+    for (const el of document.querySelectorAll('[data-act="copy-day"], [data-act="copy-week"]')) el.hidden = ui.view !== 'plan';
+    $('#menu hr').hidden = ui.view !== 'plan';
+    if (ui.view === 'projects') renderProjects();
+    else if (ui.view === 'mail') renderMail();
+    else renderPlan();
+  }
+  function setView(v, opts = {}) {
+    flush();
+    ui.view = v;
+    if ('project' in opts) ui.project = opts.project;
+    render();
+    window.scrollTo(0, 0);
+  }
+  function renderPlan() {
+    renderNav();
     renderBudget();
     $('#weekRange').textContent = C.fmtRange(week());
     goalsOL.render();
     renderRoutines();
     tasksOL.render();
     renderBanners();
+    renderWeekDeadlines();
   }
 
   function relative(date) {
@@ -611,6 +673,329 @@
     }
   }
 
+  /* ---------- projects ---------- */
+  const proj = id => D.projects.find(p => p.id === id) || null;
+  const nameEq = (a, b) => C.label(a).trim().toLowerCase() === C.label(b).trim().toLowerCase();
+  const matchesProject = (p, text) => !!p.name.trim() && (C.goalMatch(p.name, text) || nameEq(p.name, text));
+  const projectFor = text => D.projects.find(p => !p.archived && matchesProject(p, text)) || null;
+  const openTodos = p => p.todos.filter(t => !t.done && t.text.trim()).length;
+  const activeProjects = () => D.projects.filter(p => !p.archived).sort((a, b) => {
+    const da = a.fields.deadline || '9999', db = b.fields.deadline || '9999';
+    return da < db ? -1 : da > db ? 1 : a.name.localeCompare(b.name);
+  });
+
+  // A to-do planned for today shows up in the day under its project, and checking either one checks both.
+  function planTodo(p, todo) {
+    const t = today();
+    const L = ensureDay(t).lines;
+    todo.planned = t;
+    if (L.some(l => l.ref && l.ref.t === todo.id && !l.moved && !l.done)) return false;
+    const name = p.name.trim() || 'Untitled project';
+    const g = C.groups(L).find(([s]) => !L[s].done && matchesProject(p, L[s].text));
+    const line = { id: uid(), text: todo.text, level: 1, done: false, ref: { p: p.id, t: todo.id } };
+    if (g) L.splice(g[1], 0, line);
+    else L.splice(C.firstDoneGroup(L), 0, { id: uid(), text: name, level: 0, done: false }, line);
+    return true;
+  }
+  function syncFromDay(lines) {
+    for (const l of lines) {
+      if (!l.ref) continue;
+      const p = proj(l.ref.p);
+      const i = p ? p.todos.findIndex(x => x.id === l.ref.t) : -1;
+      if (i >= 0 && p.todos[i].done !== l.done) C.toggle(p.todos, i, true);
+    }
+  }
+  function syncFromTodos(todos) {
+    for (const t of todos) {
+      for (const day of Object.values(D.days)) {
+        const id = (day.lines.find(l => l.ref && l.ref.t === t.id && !l.moved && l.done !== t.done) || {}).id;
+        if (!id) continue;
+        C.toggle(day.lines, day.lines.findIndex(l => l.id === id), true);
+      }
+    }
+  }
+
+  function renderProjects() {
+    const p = proj(ui.project);
+    if (!p) ui.project = null;
+    $('#projList').hidden = !!p;
+    $('#projSheet').hidden = !p;
+    if (p) renderSheet(p); else renderProjectList();
+  }
+  function projectRow(p) {
+    const t = today();
+    const due = C.dueLabel(p.fields.deadline, t);
+    const n = openTodos(p);
+    const who = C.nameIn(p.fields.spoc) || C.emailIn(p.fields.spoc);
+    return `<button type="button" class="prow" data-act="open-project" data-pid="${esc(p.id)}">` +
+      `<span class="pmain"><span class="pname">${esc(p.name.trim() || 'Untitled project')}</span>` +
+      `${who ? `<span class="pmeta">${esc(who)}</span>` : ''}</span>` +
+      `<span class="pside">${n ? `<span class="note">${n} to ${n === 1 ? 'do' : 'dos'}</span>` : ''}` +
+      `${due && !p.archived ? `<span class="due${due.late ? ' late' : due.soon ? ' soon' : ''}">${esc(due.text)}</span>` : ''}</span></button>`;
+  }
+  function renderProjectList() {
+    const active = activeProjects();
+    const archived = D.projects.filter(p => p.archived).sort((a, b) => a.name.localeCompare(b.name));
+    let h = active.length
+      ? `<div class="plist">${active.map(projectRow).join('')}</div>`
+      : '<p class="empty">Keep each project’s contact, links, deadline, notes and to-dos in one place. Create one with New project, or bring your projects over with Import from version 0.1 in the ⋯ menu.</p>';
+    if (archived.length) h += `<details class="archived"><summary>Archived (${archived.length})</summary><div class="plist">${archived.map(projectRow).join('')}</div></details>`;
+    $('#projItems').innerHTML = h;
+    $('[data-act="project-new"]').disabled = !!readOnly;
+  }
+  function renderSheetSub() {
+    const p = proj(ui.project);
+    if (!p) return;
+    const due = C.dueLabel(p.fields.deadline, today());
+    const n = openTodos(p);
+    const bits = [];
+    if (p.archived) bits.push('<span class="note">Archived</span>');
+    if (due) bits.push(`<span class="due${due.late ? ' late' : due.soon ? ' soon' : ''}">${esc(due.text)}</span>`);
+    $('#pSub').innerHTML = bits.join('');
+    $('#pSub').hidden = !bits.length;
+    $('#pTodoCount').textContent = n ? `${n} open` : '';
+  }
+  function renderSheet(p) {
+    const name = $('#pName');
+    if (document.activeElement !== name) name.value = p.name;
+    name.readOnly = !!readOnly;
+    $('#archBtn').textContent = p.archived ? 'Restore' : 'Archive';
+    for (const b of document.querySelectorAll('#projSheet .crumbs .link')) b.disabled = !!readOnly && b.dataset.act !== 'project-mail';
+    projTodosOL.render();
+    $('#pFields').innerHTML = C.PROJECT_FIELDS.map(f => {
+      const v = p.fields[f.key] || '';
+      const id = `pf-${f.key}`;
+      const common = `id="${id}" data-pfield="${f.key}" ${INPUT_ATTRS}${readOnly ? ' readonly' : ''}`;
+      const ctl = f.long
+        ? `<textarea ${common} rows="1" placeholder="Add ${esc(f.label.toLowerCase())}">${esc(v)}</textarea>`
+        : `<input ${common}${f.type === 'date' ? ' type="date"' : ''} value="${esc(v)}" placeholder="${esc(f.hint || '')}">`;
+      const extra = f.long || f.type === 'date' ? '' :
+        `<button type="button" class="link open" data-act="open-link" data-key="${f.key}"${C.linkOf(v) ? '' : ' hidden'}>Open</button>`;
+      return `<div class="pf${f.long ? ' long' : ''}"><label for="${id}">${esc(f.label)}</label><div class="pv">${ctl}${extra}</div></div>`;
+    }).join('');
+    for (const ta of document.querySelectorAll('#pFields textarea')) grow(ta);
+    renderSheetSub();
+  }
+  function grow(ta) { ta.style.height = 'auto'; ta.style.height = `${ta.scrollHeight + 2}px`; }
+
+  $('#view-projects').addEventListener('input', e => {
+    const p = proj(ui.project);
+    if (!p || readOnly) return;
+    const el = e.target;
+    if (el.id === 'pName') { p.name = el.value; changed(); return; }
+    const k = el.dataset.pfield;
+    if (!k) return;
+    if (el.value) p.fields[k] = el.value; else delete p.fields[k];
+    changed();
+    if (el.tagName === 'TEXTAREA') grow(el);
+    const open = el.parentElement.querySelector('.open');
+    if (open) open.hidden = !C.linkOf(el.value);
+    if (k === 'deadline') renderSheetSub();
+  });
+
+  function renderWeekDeadlines() {
+    const el = $('#weekDeadlines');
+    const mon = week(), sun = C.addDays(mon, 6);
+    const due = D.projects.filter(p => !p.archived && p.fields.deadline >= mon && p.fields.deadline <= sun)
+      .sort((a, b) => (a.fields.deadline < b.fields.deadline ? -1 : 1));
+    el.hidden = !due.length;
+    el.innerHTML = due.length ? 'Deadlines: ' + due.map(p =>
+      `<button type="button" class="link" data-act="open-project" data-pid="${esc(p.id)}">${esc(p.name.trim() || 'Untitled')}, ${esc(C.fmtShort(p.fields.deadline))}</button>`).join(' ') : '';
+  }
+
+  /* ---------- mail ---------- */
+  const tplById = id => D.templates.find(t => t.id === id) || null;
+  const missingStarters = () => C.STARTER_TEMPLATES.filter(x => !D.templates.some(t => t.name.trim().toLowerCase() === x.name.toLowerCase()));
+  const tplLangs = t => ['en', 'es'].filter(l => t[l].subject.trim() || t[l].body.trim());
+  const LANG = { en: 'English', es: 'Spanish' };
+
+  function renderMail() {
+    const t = tplById(ui.mail.tpl);
+    if (!t) { ui.mail.tpl = null; ui.mail.editing = false; }
+    $('#mailList').hidden = !!t;
+    $('#mailCompose').hidden = !t;
+    if (t) renderCompose(t); else renderTemplateList();
+  }
+  function renderTemplateList() {
+    $('[data-act="tpl-new"]').disabled = !!readOnly;
+    const list = D.templates.slice().sort((a, b) => a.name.localeCompare(b.name));
+    if (!list.length) {
+      $('#tplItems').innerHTML = '<div class="empty"><p>Save the emails you send again and again, in English and Spanish. Write the parts that change in {{double braces}}: project details such as {{first_name}} or {{deadline}} fill in from the project, and anything else becomes a blank to fill in.</p>' +
+        `<div class="actions"><button type="button" class="btn" data-act="tpl-seed"${readOnly ? ' disabled' : ''}>Add example templates</button>` +
+        `<button type="button" class="btn ghost" data-act="import-v01"${readOnly ? ' disabled' : ''}>Import from version 0.1…</button></div></div>`;
+      return;
+    }
+    $('#tplItems').innerHTML = `<div class="plist">${list.map(t => `<button type="button" class="prow" data-act="tpl-open" data-tid="${esc(t.id)}">` +
+      `<span class="pmain"><span class="pname">${esc(t.name.trim() || 'Untitled template')}</span>` +
+      `<span class="pmeta">${esc(C.fill(t[tplLangs(t)[0] || 'en'].subject, {}).trim() || 'No subject yet')}</span></span>` +
+      `<span class="pside">${['en', 'es'].map(l => `<span class="lang${tplLangs(t).includes(l) ? '' : ' off'}" title="${tplLangs(t).includes(l) ? '' : 'Not written in '}${LANG[l]}">${l.toUpperCase()}</span>`).join('')}</span></button>`).join('')}</div>` +
+      (missingStarters().length && !readOnly ? `<p class="more"><button type="button" class="link" data-act="tpl-seed">Add the ${missingStarters().length === C.STARTER_TEMPLATES.length ? '' : 'missing '}example templates</button></p>` : '');
+  }
+
+  function openTemplate(id, projectId) {
+    const m = ui.mail;
+    m.tpl = id; m.fields = {}; m.editing = false; m.toTouched = false; m.to = ''; m.lang = null;
+    if (projectId !== undefined) m.project = projectId;
+    if (m.project && !proj(m.project)) m.project = '';
+    renderMail();
+    window.scrollTo(0, 0);
+  }
+  function mailLang(t) {
+    const m = ui.mail, langs = tplLangs(t), p = proj(m.project);
+    if (m.lang && (langs.includes(m.lang) || m.editing)) return m.lang;
+    const want = (p && p.lang) || D.settings.me.lang;
+    m.lang = langs.includes(want) || !langs.length ? want : langs[0];
+    return m.lang;
+  }
+  function mailValues(t) {
+    const m = ui.mail, lang = mailLang(t);
+    const v = C.autoValues(proj(m.project), D.settings.me, lang, today());
+    for (const [k, x] of Object.entries(m.fields)) if (x && x.trim()) v[k] = x;
+    return v;
+  }
+  const langSeg = (lang, langs, editing) => `<div class="seg" role="group" aria-label="Language">${['en', 'es'].map(l =>
+    `<button type="button" data-act="mail-lang" data-lang="${l}" aria-pressed="${lang === l}"${!editing && !langs.includes(l) ? ` disabled title="Not written in ${LANG[l]} yet"` : ''}>${LANG[l]}</button>`).join('')}</div>`;
+
+  function renderCompose(t) {
+    const m = ui.mail;
+    const btn = $('#tplEditBtn');
+    btn.textContent = m.editing ? 'Done editing' : 'Edit template';
+    btn.disabled = !!readOnly;
+    if (m.editing) { renderEditor(t); return; }
+    const langs = tplLangs(t);
+    const box = $('#composeBody');
+    if (!langs.length) {
+      box.innerHTML = `<h1 class="ctitle">${esc(t.name.trim() || 'Untitled template')}</h1><p class="empty">This template is empty. Choose Edit template to write it in English or Spanish.</p>`;
+      return;
+    }
+    const lang = mailLang(t);
+    const c = t[lang];
+    const p = proj(m.project);
+    const auto = C.autoValues(p, D.settings.me, lang, today());
+    const names = C.placeholders(c.subject + '\n' + c.body);
+    const blanks = names.filter(n => !auto[n]);
+    const filled = names.filter(n => auto[n]);
+    if (!m.toTouched) m.to = auto.spoc_email || '';
+    const projOptions = activeProjects().concat(p && p.archived ? [p] : [])
+      .map(x => `<option value="${esc(x.id)}"${x.id === m.project ? ' selected' : ''}>${esc(x.name.trim() || 'Untitled project')}</option>`).join('');
+    box.innerHTML =
+      `<h1 class="ctitle">${esc(t.name.trim() || 'Untitled template')}</h1>` +
+      '<div class="cgrid">' +
+      `<label class="ef">Project<select data-mail="project"><option value="">No project</option>${projOptions}</select></label>` +
+      `<div class="ef"><span>Language</span>${langSeg(lang, langs, false)}</div>` +
+      `<label class="ef wide">To<input data-mail="to" type="email" value="${esc(m.to)}" placeholder="name@company.com" ${INPUT_ATTRS}></label>` +
+      '</div>' +
+      (blanks.length ? `<div class="blanks"><h2>Fill in</h2>${blanks.map(n => {
+        const v = esc(m.fields[n] || '');
+        const ctl = C.isLongBlank(n)
+          ? `<textarea data-mfield="${esc(n)}" rows="3" ${INPUT_ATTRS}>${v}</textarea>`
+          : `<input data-mfield="${esc(n)}" value="${v}" ${INPUT_ATTRS}>`;
+        return `<label class="ef${C.isLongBlank(n) ? ' wide' : ''}">${esc(C.humanize(n))}${ctl}</label>`;
+      }).join('')}</div>` : '') +
+      (filled.length ? `<p class="hint">Filled in from ${p ? esc(p.name.trim() || 'the project') : 'your details'}: ${filled.map(n => esc(/^[A-Z]{2,}/.test(C.humanize(n)) ? C.humanize(n) : C.humanize(n).toLowerCase())).join(', ')}.</p>` : '') +
+      '<div class="preview" aria-live="polite"><p class="psubj" id="pvSubject"></p><div class="pbody" id="pvBody"></div></div>' +
+      '<div class="actions"><button type="button" class="btn" data-act="mail-copy" data-what="body">Copy email</button>' +
+      '<button type="button" class="btn ghost" data-act="mail-copy" data-what="subject">Copy subject</button>' +
+      '<button type="button" class="btn ghost" data-act="mail-open">Open in mail app</button>' +
+      '<span class="missing" id="mailMissing"></span></div>';
+    for (const ta of box.querySelectorAll('textarea')) grow(ta);
+    renderPreview(t);
+  }
+  function partsHtml(parts) {
+    return parts.map(x => (x.blank ? `<mark class="blank">${esc(C.humanize(x.blank))}</mark>` : esc(x.text))).join('');
+  }
+  function renderPreview(t) {
+    const c = t[mailLang(t)], v = mailValues(t);
+    $('#pvSubject').innerHTML = partsHtml(C.fillParts(c.subject, v)) || '<span class="note">No subject</span>';
+    $('#pvBody').innerHTML = partsHtml(C.fillParts(c.body, v));
+    const n = C.placeholders(c.subject + '\n' + c.body).filter(x => !v[x]).length;
+    $('#mailMissing').textContent = n ? `${n} ${n === 1 ? 'blank' : 'blanks'} left` : '';
+  }
+
+  let lastTplField = null;
+  function renderEditor(t) {
+    const lang = mailLang(t);
+    const c = t[lang];
+    const ro = readOnly ? ' readonly' : '';
+    const chips = ['first_name', 'contact', 'project', 'deadline', 'db', 'website', 'task_link', 'version', 'ba', 'date', 'my_name', 'signature'];
+    $('#composeBody').innerHTML =
+      `<label class="ef wide">Template name<input data-tpl="name" value="${esc(t.name)}" placeholder="For example Weekly status" ${INPUT_ATTRS}${ro}></label>` +
+      `<div class="ef"><span>Language</span>${langSeg(lang, tplLangs(t), true)}</div>` +
+      `<label class="ef wide">Subject<input data-tpl="subject" value="${esc(c.subject)}" ${INPUT_ATTRS}${ro}></label>` +
+      `<label class="ef wide">Email<textarea data-tpl="body" rows="10" ${INPUT_ATTRS}${ro}>${esc(c.body)}</textarea></label>` +
+      `<div class="chips" aria-label="Insert a project detail"><span class="hint">Insert:</span>${chips.map(n =>
+        `<button type="button" class="chip" data-act="tpl-insert" data-name="${n}"${readOnly ? ' disabled' : ''}>${esc(C.humanize(n))}</button>`).join('')}</div>` +
+      '<p class="hint">Project details fill in by themselves. Anything else you write in {{double braces}}, like {{next_steps}}, becomes a blank to fill in when you use the template.</p>' +
+      `<div class="actions"><button type="button" class="btn" data-act="tpl-edit">Done editing</button><span class="grow"></span><button type="button" class="link danger" data-act="tpl-delete"${readOnly ? ' disabled' : ''}>Delete template</button></div>`;
+    lastTplField = null;
+    const body = $('#composeBody textarea');
+    if (body) grow(body);
+  }
+
+  $('#view-mail').addEventListener('focusin', e => { if (e.target.matches('[data-tpl="subject"], [data-tpl="body"]')) lastTplField = e.target; });
+  $('#view-mail').addEventListener('input', e => {
+    const t = tplById(ui.mail.tpl);
+    if (!t) return;
+    const el = e.target, m = ui.mail;
+    if (el.dataset.tpl) {
+      if (readOnly) return;
+      if (el.dataset.tpl === 'name') t.name = el.value;
+      else t[mailLang(t)][el.dataset.tpl] = el.value;
+      if (el.tagName === 'TEXTAREA') grow(el);
+      changed();
+      return;
+    }
+    if (el.dataset.mfield) { m.fields[el.dataset.mfield] = el.value; if (el.tagName === 'TEXTAREA') grow(el); renderPreview(t); return; }
+    if (el.dataset.mail === 'to') { m.to = el.value; m.toTouched = true; }
+  });
+  $('#view-mail').addEventListener('change', e => {
+    if (e.target.dataset.mail !== 'project') return;
+    const m = ui.mail;
+    m.project = e.target.value;
+    m.lang = null;
+    m.toTouched = false;
+    renderMail();
+  });
+
+  function insertPlaceholder(name) {
+    const t = tplById(ui.mail.tpl);
+    const el = lastTplField && document.contains(lastTplField) ? lastTplField : $('[data-tpl="body"]');
+    if (!t || !el || readOnly) return;
+    const token = `{{${name}}}`;
+    const a = el.selectionStart ?? el.value.length, b = el.selectionEnd ?? a;
+    el.value = el.value.slice(0, a) + token + el.value.slice(b);
+    el.focus();
+    el.setSelectionRange(a + token.length, a + token.length);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  function currentEmail() {
+    const t = tplById(ui.mail.tpl);
+    const c = t[mailLang(t)], v = mailValues(t);
+    return { subject: C.fill(c.subject, v), body: C.fill(c.body, v), blanks: C.placeholders(c.subject + '\n' + c.body).filter(x => !v[x]).length };
+  }
+
+  /* ---------- importing version 0.1 data ---------- */
+  $('#importFile').addEventListener('change', async e => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file || readOnly) return;
+    let data;
+    try { data = JSON.parse(await file.text()); } catch { toast('That file isn’t a backup: it couldn’t be read as JSON.'); return; }
+    const r = C.importV01(data, uid);
+    const have = new Set(D.templates.map(t => t.name.trim().toLowerCase()));
+    const haveP = new Set(D.projects.map(p => p.name.trim().toLowerCase()));
+    const tpls = r.templates.filter(t => !have.has(t.name.trim().toLowerCase()));
+    const projs = r.projects.filter(p => !haveP.has(p.name.trim().toLowerCase()));
+    if (!r.templates.length && !r.projects.length) { toast('No templates or projects were found in that file.'); return; }
+    D.templates.push(...tpls);
+    D.projects.push(...projs);
+    changed();
+    render();
+    const skipped = r.templates.length - tpls.length + r.projects.length - projs.length;
+    toast(`Imported ${tpls.length} ${tpls.length === 1 ? 'template' : 'templates'} and ${projs.length} ${projs.length === 1 ? 'project' : 'projects'}` +
+      (skipped ? `; ${skipped} already here were skipped` : ''));
+  });
+
   /* ---------- actions ---------- */
   function goToDate(date) {
     flush();
@@ -648,7 +1033,104 @@
     settings: () => { toggleMenu(false); openSettings(); },
     'choose-folder': () => chooseFolder(),
     reveal: () => Backend.reveal && Backend.reveal().catch(e => toast(String(e))),
-    'retry-save': () => { dirty = true; flush(); }
+    'retry-save': () => { dirty = true; flush(); },
+    view: el => setView(el.dataset.view),
+    'open-project': el => setView('projects', { project: el.dataset.pid }),
+    'projects-back': () => setView('projects', { project: null }),
+    'project-new': () => {
+      if (readOnly) return;
+      const p = { id: uid(), name: '', archived: false, lang: D.settings.me.lang, fields: {}, todos: [] };
+      D.projects.push(p);
+      changed();
+      setView('projects', { project: p.id });
+      $('#pName').focus();
+    },
+    'project-archive': () => {
+      const p = proj(ui.project);
+      if (!p || readOnly) return;
+      p.archived = !p.archived;
+      changed();
+      toast(p.archived ? 'Archived. It stays in the Archived list.' : 'Restored to your projects');
+      renderProjects();
+    },
+    'project-delete': async () => {
+      const p = proj(ui.project);
+      if (!p || readOnly) return;
+      const ans = await ask({ title: `Delete ${p.name.trim() || 'this project'}?`, body: 'Its details and to-dos will be removed. Tasks already in your daily plans stay. To keep it out of the way instead, archive it.', a: 'Delete', b: 'Archive' });
+      if (ans === 'a') { D.projects = D.projects.filter(x => x !== p); changed(); setView('projects', { project: null }); toast('Project deleted'); }
+      else if (ans === 'b') { p.archived = true; changed(); renderProjects(); }
+    },
+    'project-mail': () => { ui.mail.project = ui.project; ui.mail.tpl = null; setView('mail'); },
+    'open-link': el => {
+      const p = proj(ui.project);
+      const url = p && C.linkOf(p.fields[el.dataset.key]);
+      if (url) Backend.open(url).catch(e => toast(String(e)));
+    },
+    'plan-todo': el => {
+      const p = proj(ui.project);
+      const todo = p && p.todos.find(x => x.id === el.closest('.row').dataset.id);
+      if (!todo || readOnly || !todo.text.trim()) return;
+      const added = planTodo(p, todo);
+      changed();
+      projTodosOL.refresh();
+      toast(added ? 'Added to today’s plan' : 'Already in today’s plan');
+    },
+    'tpl-open': el => openTemplate(el.dataset.tid),
+    'mail-back': () => { flush(); ui.mail.tpl = null; ui.mail.editing = false; renderMail(); },
+    'tpl-new': () => {
+      if (readOnly) return;
+      const t = { id: uid(), name: '', en: { subject: '', body: '' }, es: { subject: '', body: '' } };
+      D.templates.push(t);
+      changed();
+      openTemplate(t.id);
+      ui.mail.editing = true;
+      ui.mail.lang = D.settings.me.lang;
+      renderMail();
+      $('[data-tpl="name"]').focus();
+    },
+    'tpl-seed': () => {
+      if (readOnly) return;
+      D.templates.push(...missingStarters().map(t => ({ id: uid(), name: t.name, en: { ...t.en }, es: { ...t.es } })));
+      changed();
+      renderMail();
+    },
+    'tpl-edit': () => {
+      if (readOnly) return;
+      ui.mail.editing = !ui.mail.editing;
+      flush();
+      renderMail();
+    },
+    'tpl-delete': async () => {
+      const t = tplById(ui.mail.tpl);
+      if (!t || readOnly) return;
+      const ans = await ask({ title: `Delete ${t.name.trim() || 'this template'}?`, body: 'Both the English and Spanish versions will be removed.', a: 'Delete', b: '' });
+      if (ans !== 'a') return;
+      D.templates = D.templates.filter(x => x !== t);
+      changed();
+      ui.mail.tpl = null;
+      ui.mail.editing = false;
+      renderMail();
+    },
+    'tpl-insert': el => insertPlaceholder(el.dataset.name),
+    'mail-lang': el => {
+      const t = tplById(ui.mail.tpl);
+      if (!t) return;
+      ui.mail.lang = el.dataset.lang;
+      renderCompose(t);
+    },
+    'mail-copy': el => {
+      const e = currentEmail();
+      const left = e.blanks ? `, with ${e.blanks} ${e.blanks === 1 ? 'blank' : 'blanks'} still empty` : '';
+      if (el.dataset.what === 'subject') copy(e.subject, 'Subject copied' + left);
+      else copy(e.body, 'Email copied' + left);
+    },
+    'mail-open': () => {
+      const e = currentEmail();
+      const url = C.mailto(ui.mail.to.trim(), e.subject, e.body);
+      Backend.open(url).catch(err => toast(String(err)));
+      if (url.length > 2000) toast('Long email: if your mail app cuts it short, use Copy email instead.');
+    },
+    'import-v01': () => { toggleMenu(false); if ($('#settings').open) $('#settings').close(); $('#importFile').click(); }
   };
   document.addEventListener('click', e => {
     const a = e.target.closest('[data-act]');
@@ -709,6 +1191,10 @@
       : 'This is the browser preview. Your data stays in this browser only; the desktop app saves it to a file.';
     $('#dataActions').hidden = !file;
     $('[data-act="reveal"]').textContent = isMac ? 'Show in Finder' : /Win/.test(navigator.userAgent) ? 'Show in Explorer' : 'Open folder';
+    $('#meName').value = D.settings.me.name;
+    $('#meSignature').value = D.settings.me.signature;
+    $('#meLang').value = D.settings.me.lang;
+    for (const id of ['meName', 'meSignature', 'meLang']) $('#' + id).disabled = !!readOnly;
     $('#defBegin').value = D.settings.begin;
     $('#defEnd').value = D.settings.end;
     $('#defBegin').disabled = $('#defEnd').disabled = !!readOnly;
@@ -725,12 +1211,21 @@
     });
   }
 
+  for (const [id, key] of [['meName', 'name'], ['meSignature', 'signature'], ['meLang', 'lang']]) {
+    $('#' + id).addEventListener(id === 'meLang' ? 'change' : 'input', e => {
+      if (readOnly) return;
+      D.settings.me[key] = key === 'lang' ? (e.target.value === 'es' ? 'es' : 'en') : e.target.value;
+      changed();
+    });
+  }
+
   function ask({ title, body, a, b }) {
     const d = $('#confirm');
     $('#cf-title').textContent = title;
     $('#cf-body').textContent = body;
     $('#cf-a').textContent = a;
-    $('#cf-b').textContent = b;
+    $('#cf-b').textContent = b || '';
+    $('#cf-b').hidden = !b;
     d.returnValue = '';
     d.showModal();
     return new Promise(res => d.addEventListener('close', () => res(d.returnValue), { once: true }));
@@ -764,10 +1259,21 @@
   /* ---------- keyboard and lifecycle ---------- */
   document.addEventListener('keydown', e => {
     if ((e.metaKey || e.ctrlKey) && e.key === ',') { e.preventDefault(); openSettings(); return; }
+    if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && ['1', '2', '3'].includes(e.key) && !document.querySelector('dialog[open]')) {
+      e.preventDefault();
+      setView(VIEWS[Number(e.key) - 1]);
+      return;
+    }
     if (e.key === 'Escape' && !$('#menu').hidden) { toggleMenu(false); $('[data-act="menu"]').focus(); return; }
     const el = document.activeElement;
-    if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') || document.querySelector('dialog[open]')) return;
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const typing = el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT');
+    if (typing || document.querySelector('dialog[open]')) return;
+    if (e.key === 'Escape') {
+      if (ui.view === 'projects' && ui.project) actions['projects-back']();
+      else if (ui.view === 'mail' && ui.mail.tpl) actions['mail-back']();
+      return;
+    }
+    if (e.metaKey || e.ctrlKey || e.altKey || ui.view !== 'plan') return;
     if (e.key === 'ArrowLeft') { e.preventDefault(); actions.prev(); }
     else if (e.key === 'ArrowRight') { e.preventDefault(); actions.next(); }
     else if (e.key === 't' || e.key === 'T') actions.today();

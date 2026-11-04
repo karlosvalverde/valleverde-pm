@@ -9,7 +9,32 @@
 </head>
 <body>
   <div class="app" id="app" hidden>
-    <nav class="top" aria-label="Day">
+    <nav class="tabs" aria-label="Views">
+      <div class="tablist" role="tablist">
+        <button type="button" role="tab" data-act="view" data-view="plan" id="tab-plan" aria-controls="view-plan" title="Plan (⌘1)">Plan</button>
+        <button type="button" role="tab" data-act="view" data-view="projects" id="tab-projects" aria-controls="view-projects" title="Projects (⌘2)">Projects</button>
+        <button type="button" role="tab" data-act="view" data-view="mail" id="tab-mail" aria-controls="view-mail" title="Mail (⌘3)">Mail</button>
+      </div>
+      <span class="grow"></span>
+      <button type="button" class="save-error" id="saveState" data-act="retry-save" hidden>Not saved</button>
+      <div class="menu-wrap">
+        <button type="button" class="icon" data-act="menu" aria-haspopup="menu" aria-expanded="false" aria-label="More">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="3.5" cy="8" r="1.2"/><circle cx="8" cy="8" r="1.2"/><circle cx="12.5" cy="8" r="1.2"/></svg>
+        </button>
+        <div class="menu" id="menu" role="menu" hidden>
+          <button type="button" role="menuitem" data-act="copy-day">Copy day as text</button>
+          <button type="button" role="menuitem" data-act="copy-week">Copy week summary</button>
+          <hr>
+          <button type="button" role="menuitem" data-act="import-v01">Import from version 0.1…</button>
+          <button type="button" role="menuitem" data-act="settings">Settings</button>
+        </div>
+      </div>
+    </nav>
+
+    <p class="notice" id="notice" role="alert" hidden></p>
+
+    <main id="view-plan" role="tabpanel" aria-labelledby="tab-plan">
+    <div class="top">
       <div class="daynav">
         <button type="button" class="icon" data-act="prev" aria-label="Previous day" title="Previous day (←)">
           <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3 5 8l5 5"/></svg>
@@ -23,21 +48,7 @@
         <span class="rel" id="rel"></span>
       </div>
       <button type="button" class="btn ghost small" data-act="today" id="todayBtn" title="Go to today (T)">Today</button>
-      <button type="button" class="save-error" id="saveState" data-act="retry-save" hidden>Not saved</button>
-      <div class="menu-wrap">
-        <button type="button" class="icon" data-act="menu" aria-haspopup="menu" aria-expanded="false" aria-label="More">
-          <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="3.5" cy="8" r="1.2"/><circle cx="8" cy="8" r="1.2"/><circle cx="12.5" cy="8" r="1.2"/></svg>
-        </button>
-        <div class="menu" id="menu" role="menu" hidden>
-          <button type="button" role="menuitem" data-act="copy-day">Copy day as text</button>
-          <button type="button" role="menuitem" data-act="copy-week">Copy week summary</button>
-          <hr>
-          <button type="button" role="menuitem" data-act="settings">Settings</button>
-        </div>
-      </div>
-    </nav>
-
-    <p class="notice" id="notice" role="alert" hidden></p>
+    </div>
 
     <header class="budget" aria-label="Time budget">
       <div class="figures">
@@ -59,6 +70,7 @@
       </div>
       <div id="goalsBanner"></div>
       <div class="outline" id="goals"></div>
+      <p class="deadlines" id="weekDeadlines" hidden></p>
     </section>
 
     <section class="block" aria-labelledby="h-rout">
@@ -77,7 +89,62 @@
       <div id="tasksBanner"></div>
       <div class="outline" id="tasks"></div>
     </section>
+    </main>
+
+    <main id="view-projects" role="tabpanel" aria-labelledby="tab-projects" hidden>
+      <section id="projList">
+        <div class="view-head">
+          <h1>Projects</h1>
+          <button type="button" class="btn" data-act="project-new">New project</button>
+        </div>
+        <div id="projItems"></div>
+      </section>
+      <section id="projSheet" hidden>
+        <div class="crumbs">
+          <button type="button" class="icon" data-act="projects-back" aria-label="All projects" title="All projects (Esc)">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3 5 8l5 5"/></svg>
+          </button>
+          <span class="crumb">Projects</span>
+          <span class="grow"></span>
+          <button type="button" class="link" data-act="project-mail">Write an email</button>
+          <button type="button" class="link" data-act="project-archive" id="archBtn">Archive</button>
+          <button type="button" class="link danger" data-act="project-delete">Delete</button>
+        </div>
+        <input class="ptitle" id="pName" placeholder="Project name" aria-label="Project name" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+        <p class="psub" id="pSub"></p>
+        <section class="block" aria-labelledby="h-ptodos">
+          <div class="block-head"><h2 id="h-ptodos">Project to-dos</h2><span class="range" id="pTodoCount"></span></div>
+          <div class="outline" id="pTodos"></div>
+        </section>
+        <section class="block" aria-labelledby="h-pdetails">
+          <div class="block-head"><h2 id="h-pdetails">Details</h2></div>
+          <div class="pfields" id="pFields"></div>
+        </section>
+      </section>
+    </main>
+
+    <main id="view-mail" role="tabpanel" aria-labelledby="tab-mail" hidden>
+      <section id="mailList">
+        <div class="view-head">
+          <h1>Mail templates</h1>
+          <button type="button" class="btn" data-act="tpl-new">New template</button>
+        </div>
+        <div id="tplItems"></div>
+      </section>
+      <section id="mailCompose" hidden>
+        <div class="crumbs">
+          <button type="button" class="icon" data-act="mail-back" aria-label="All templates" title="All templates (Esc)">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3 5 8l5 5"/></svg>
+          </button>
+          <span class="crumb">Mail templates</span>
+          <span class="grow"></span>
+          <button type="button" class="link" data-act="tpl-edit" id="tplEditBtn">Edit template</button>
+        </div>
+        <div id="composeBody"></div>
+      </section>
+    </main>
   </div>
+  <input type="file" id="importFile" accept=".json,application/json" hidden>
 
   <dialog id="settings" aria-labelledby="set-title">
     <form method="dialog" class="sheet">
@@ -89,6 +156,16 @@
         <div class="actions" id="dataActions">
           <button type="button" class="btn" data-act="choose-folder">Choose folder…</button>
           <button type="button" class="btn ghost" data-act="reveal">Show in Finder</button>
+        </div>
+      </section>
+      <section>
+        <h3>Your details for emails</h3>
+        <div class="stack">
+          <label class="ef">Name <input id="meName" autocomplete="off" autocorrect="off" spellcheck="false"></label>
+          <label class="ef">Signature <textarea id="meSignature" rows="3" placeholder="Used for {{signature}}. Leave empty to use your name." autocorrect="off" spellcheck="false"></textarea></label>
+          <label class="ef">Default language
+            <select id="meLang"><option value="en">English</option><option value="es">Spanish</option></select>
+          </label>
         </div>
       </section>
       <section>
@@ -107,8 +184,14 @@
           <dt><kbd data-alt>Option</kbd>+<kbd>↑</kbd> <kbd>↓</kbd></dt><dd>Move the line, or the whole project</dd>
           <dt><kbd>←</kbd> <kbd>→</kbd> <kbd>T</kbd></dt><dd>Previous day, next day, today (when not typing)</dd>
           <dt><kbd>N</kbd></dt><dd>Add a task (when not typing)</dd>
+          <dt><kbd data-mod>⌘</kbd>+<kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></dt><dd>Plan, Projects, Mail</dd>
         </dl>
         <p class="hint">Write a duration anywhere in a line, like 15m, 2h or 1h30, and it counts toward the time left.</p>
+      </section>
+      <section>
+        <h3>Version 0.1 data</h3>
+        <p class="hint">If you saved a backup from version 0.1, its mail templates and projects can be added here. Nothing you already have is replaced.</p>
+        <div class="actions"><button type="button" class="btn ghost" data-act="import-v01">Import a backup…</button></div>
       </section>
       <footer>
         <span class="version" id="version"></span>
