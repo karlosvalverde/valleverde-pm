@@ -5,6 +5,73 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-04
+
+Markdown import and export adjusted to a real export from Notes on macOS 26.
+
+### Added
+- **Salesperson** and **References** fields on projects, in the order of a typical project note. Both fill `{{salesperson}}` and `{{references}}` in templates.
+
+### Fixed
+- The invisible line separators Notes writes (U+2028) no longer join lines together.
+- **Titles in double bold** (`****Project****`) come through clean.
+- **List items aren't read as labels,** so an app called “Website” under Apps stays an app.
+- **Unknown bold labels** such as “SALESPERSON:” start their own section, instead of joining the field above.
+- **A schedule between `—` separators,** written as `**Phase** - xxx` or `**Phase** - 15/12/2026`, becomes the project schedule without needing a heading.
+- **Placeholders** like `xxx`, `?` and `-` count as empty, so “Deadline: ?” means no deadline yet.
+- **Half-linked addresses** like `[https://site](https://site).com` are put back together.
+- Lists keep one item per line, without bold markers.
+
+### Changed
+- **Exported files look like the original notes:** a bold title, `**Label:**` lines with Notes' line breaks, and the schedule as a checklist between `—` separators. Asterisks in the text are escaped.
+
+## [0.5.0] - 2026-11-04
+
+### Added
+- **Import projects from Markdown:** files exported from Notes (File, then Export as, then Markdown, on macOS 26 or later), any `.md` or `.txt` file, or a note pasted after Edit, then Copy as Markdown.
+  - Headings, bold labels and `Label: value` lines are recognised in English and Spanish, so “Project TODO’s”, “SPOC”, “DB”, “Current website”, “Deadline” and the rest land in the right place.
+  - Checklists become to-dos, numbered or checked lists under the schedule become phases with their dates, and anything unrecognised goes to Notes.
+  - A preview shows what was found. Projects that match existing ones can update them or be added as new.
+- **Export projects to Markdown,** one from its sheet or several from Select. The files open in Notes (File, then Import Markdown) and import back into the app unchanged.
+- **Language review:** Review with Claude, on an email or a template being edited, opens a new chat in your assistant with a request to check spelling, grammar and tone, in the email's language. Your assistant is set in Settings: Claude Desktop, Claude or ChatGPT in the browser, Gemini, or copy only.
+- **French and Italian** for mail templates, with dates written in each language. The example templates come in all four languages.
+- **Website copy** tab on each project:
+  - A brief: audience, tone of voice, key messages, SEO keywords and calls to action, alongside the project goal.
+  - Pages, which can be added from the sitemap. Each page has blocks (headline, subheadline, body text, call to action, list, SEO title, meta description), with character counts and limits for SEO.
+  - One version per language listed under Languages involved.
+  - Draft, Improve or Translate a page with your assistant, then paste its answer back to fill in the blocks.
+  - Copy a page, or export the copy as Markdown, in one language or all of them.
+- **Email language** per project, in Details.
+- Spelling and grammar checks are on while writing emails and website copy.
+
+### Changed
+- The data file is now `schema: 5`. It adds website copy and the assistant setting.
+
+## [0.4.0] - 2026-11-04
+
+### Added
+- **Project numbers:** every project gets the next number, which you can change to match Odoo. Numbers show in the list, on the sheet and in links, and fill `{{project_number}}`.
+- **Duplicate** a project from its sheet, or several from the list.
+- **Select** in the project list: pick several projects to duplicate, archive or delete them together.
+- **Sort** the project list by number, deadline or name.
+- **Project schedule** as a list of phases, each with an optional date and a check when done. New projects start with Homepage design + design line definition, Website design, Content review / adjustments, Training / Q&A and Go live; change that list in Settings.
+  - The list and sheet show the next phase, and the plan's week shows phase dates that fall in it.
+  - `{{schedule}}` writes the phases and dates into an email.
+- **Links from the plan:** any task can be linked to a project, or to one of its to-dos, with Link or ⌘L.
+  - Actions under a linked project line belong to that project.
+  - From the picker, a task can also become a new to-do of the project.
+  - Linked to-dos are checked off in both places.
+  - Linked tasks are grouped under their project in the week summary.
+
+### Changed
+- **SPOC takes several lines,** one contact per line. Emails go to every address in it, and `{{first_name}}` greets the first contact.
+- **Deadline can be left empty,** shown as “No deadline”, and removed once set.
+- The data file is now `schema: 4`. A 0.3 project schedule written as text is kept at the end of the project's notes.
+
+### Removed
+- **Routines.** Their time no longer counts in the plan.
+- **Matching projects to plan lines by name:** links are now set explicitly.
+
 ## [0.3.0] - 2026-11-04
 
 Project notes and mail templates are back, inside the desktop app.

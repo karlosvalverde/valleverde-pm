@@ -277,10 +277,13 @@ fn reveal_data_file(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Only web links and new emails can be opened; anything else is refused.
+/// Only web links, new emails and a new Claude Desktop chat can be opened; anything else is refused.
 fn is_openable(url: &str) -> bool {
     let lower = url.to_ascii_lowercase();
-    (lower.starts_with("https://") || lower.starts_with("http://") || lower.starts_with("mailto:"))
+    (lower.starts_with("https://")
+        || lower.starts_with("http://")
+        || lower.starts_with("mailto:")
+        || lower.starts_with("claude://claude.ai/new"))
         && !url.chars().any(|c| c.is_control())
         && url.len() <= 32_000
 }
@@ -303,6 +306,81 @@ fn open_external(url: String) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Deserialize)]
+struct TextFile {
+    name: String,
+    content: String,
+}
+
+/// A safe file name: no folders, no characters macOS or Windows reject, always ending in .md.
+fn safe_md_name(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| if c.is_control() || "/\\:*?\"<>|".contains(c) { ' ' } else { c })
+        .collect();
+    let mut base = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    base = base.trim_matches(|c: char| c == '.' || c == ' ').to_string();
+    if let Some(stem) = base.strip_suffix(".md") {
+        base = stem.trim_end().to_string();
+    }
+    let mut base: String = base.chars().take(120).collect();
+    if base.is_empty() {
+        base = "Untitled".into();
+    }
+    format!("{base}.md")
+}
+
+/// "Name.md", or "Name 2.md", "Name 3.md"… if that file already exists.
+fn unused_path(dir: &Path, name: &str) -> PathBuf {
+    let first = dir.join(name);
+    if !first.exists() {
+        return first;
+    }
+    let stem = name.trim_end_matches(".md");
+    (2..10_000)
+        .map(|n| dir.join(format!("{stem} {n}.md")))
+        .find(|p| !p.exists())
+        .unwrap_or(first)
+}
+
+/// Asks where to save one Markdown file, then writes it. Returns the path, or nothing if cancelled.
+#[tauri::command]
+async fn save_text_file(app: AppHandle, name: String, content: String) -> Result<Option<String>, String> {
+    let Some(picked) = app
+        .dialog()
+        .file()
+        .set_title("Export as Markdown")
+        .set_file_name(safe_md_name(&name))
+        .add_filter("Markdown", &["md"])
+        .blocking_save_file()
+    else {
+        return Ok(None);
+    };
+    let path = picked.into_path().map_err(err)?;
+    fs::write(&path, content).map_err(|e| format!("Couldn't write {}: {e}", path.display()))?;
+    Ok(Some(path.display().to_string()))
+}
+
+/// Asks for a folder, then writes each Markdown file into it without overwriting anything.
+#[tauri::command]
+async fn save_text_files(app: AppHandle, files: Vec<TextFile>) -> Result<Option<String>, String> {
+    let Some(picked) = app
+        .dialog()
+        .file()
+        .set_title("Choose a folder for the Markdown files")
+        .set_can_create_directories(true)
+        .blocking_pick_folder()
+    else {
+        return Ok(None);
+    };
+    let dir = picked.into_path().map_err(err)?;
+    for f in &files {
+        let path = unused_path(&dir, &safe_md_name(&f.name));
+        fs::write(&path, &f.content).map_err(|e| format!("Couldn't write {}: {e}", path.display()))?;
+    }
+    Ok(Some(dir.display().to_string()))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -315,7 +393,9 @@ pub fn run() {
             choose_folder,
             use_folder,
             reveal_data_file,
-            open_external
+            open_external,
+            save_text_file,
+            save_text_files
         ])
         .run(tauri::generate_context!())
         .expect("error while running Valleverde PM");
@@ -334,6 +414,23 @@ mod tests {
         assert!(!is_openable("-a Calculator"));
         assert!(!is_openable("https://x.com/\nrm"));
         assert!(!is_openable("https://x.com/\u{0}"));
+        assert!(is_openable("claude://claude.ai/new?q=Review%20this"));
+        assert!(!is_openable("claude://claude.ai/settings"));
+    }
+
+    #[test]
+    fn markdown_names_are_safe() {
+        assert_eq!(safe_md_name("14 Mayra / Hogar: \"Menaje\""), "14 Mayra Hogar Menaje.md");
+        assert_eq!(safe_md_name("../../etc/passwd"), "etc passwd.md");
+        assert_eq!(safe_md_name("Notes.md"), "Notes.md");
+        assert_eq!(safe_md_name("  ..  "), "Untitled.md");
+        let dir = std::env::temp_dir().join(format!("vpm-names-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("A.md"), "x").unwrap();
+        assert_eq!(unused_path(&dir, "A.md"), dir.join("A 2.md"));
+        assert_eq!(unused_path(&dir, "B.md"), dir.join("B.md"));
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

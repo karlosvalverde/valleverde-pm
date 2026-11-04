@@ -73,15 +73,6 @@
       <p class="deadlines" id="weekDeadlines" hidden></p>
     </section>
 
-    <section class="block" aria-labelledby="h-rout">
-      <div class="block-head">
-        <h2 id="h-rout">Routines</h2>
-        <button type="button" class="link" data-act="edit-routines" id="routinesBtn">Edit</button>
-      </div>
-      <div class="outline" id="routines"></div>
-      <div class="outline editing" id="routinesEdit" hidden></div>
-    </section>
-
     <section class="block tasks" aria-labelledby="h-tasks">
       <div class="block-head">
         <h2 id="h-tasks">Tasks</h2>
@@ -93,10 +84,7 @@
 
     <main id="view-projects" role="tabpanel" aria-labelledby="tab-projects" hidden>
       <section id="projList">
-        <div class="view-head">
-          <h1>Projects</h1>
-          <button type="button" class="btn" data-act="project-new">New project</button>
-        </div>
+        <div class="view-head" id="projHead"></div>
         <div id="projItems"></div>
       </section>
       <section id="projSheet" hidden>
@@ -107,19 +95,36 @@
           <span class="crumb">Projects</span>
           <span class="grow"></span>
           <button type="button" class="link" data-act="project-mail">Write an email</button>
+          <button type="button" class="link" data-act="project-duplicate">Duplicate</button>
+          <button type="button" class="link" data-act="project-export">Export</button>
           <button type="button" class="link" data-act="project-archive" id="archBtn">Archive</button>
           <button type="button" class="link danger" data-act="project-delete">Delete</button>
         </div>
-        <input class="ptitle" id="pName" placeholder="Project name" aria-label="Project name" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+        <div class="ptitle-row">
+          <label class="pnum-edit" title="Project number">#<input id="pNum" inputmode="numeric" aria-label="Project number" autocomplete="off" spellcheck="false"></label>
+          <input class="ptitle" id="pName" placeholder="Project name" aria-label="Project name" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+        </div>
+        <p class="pnum-note" id="pNumNote" role="status"></p>
         <p class="psub" id="pSub"></p>
+        <div class="seg sheet-tabs" role="tablist" aria-label="Project sections">
+          <button type="button" role="tab" data-act="sheet-tab" data-tab="project" id="st-project" aria-controls="sheetProject">Project</button>
+          <button type="button" role="tab" data-act="sheet-tab" data-tab="copy" id="st-copy" aria-controls="sheetCopy">Website copy</button>
+        </div>
+        <div id="sheetProject" role="tabpanel" aria-labelledby="st-project">
         <section class="block" aria-labelledby="h-ptodos">
           <div class="block-head"><h2 id="h-ptodos">Project to-dos</h2><span class="range" id="pTodoCount"></span></div>
           <div class="outline" id="pTodos"></div>
+        </section>
+        <section class="block" aria-labelledby="h-psched">
+          <div class="block-head"><h2 id="h-psched">Project schedule</h2><span class="range" id="pSchedCount"></span></div>
+          <div class="schedule" id="pSchedule"></div>
         </section>
         <section class="block" aria-labelledby="h-pdetails">
           <div class="block-head"><h2 id="h-pdetails">Details</h2></div>
           <div class="pfields" id="pFields"></div>
         </section>
+        </div>
+        <div id="sheetCopy" role="tabpanel" aria-labelledby="st-copy" hidden></div>
       </section>
     </main>
 
@@ -145,6 +150,41 @@
     </main>
   </div>
   <input type="file" id="importFile" accept=".json,application/json" hidden>
+  <input type="file" id="mdFiles" accept=".md,.markdown,.txt,text/markdown,text/plain" multiple hidden>
+
+  <dialog id="mdImport" aria-labelledby="mi-title">
+    <form method="dialog" class="sheet">
+      <h2 id="mi-title">Import projects from Markdown</h2>
+      <p class="hint">In Notes, select one or more project notes and choose File, then Export as, then Markdown. Choose the exported files here. Or, for one note, choose Edit, then Copy as Markdown, and paste it below.</p>
+      <div class="actions"><button type="button" class="btn ghost" data-act="md-choose">Choose files…</button><span class="note" id="miFiles"></span></div>
+      <label class="ef">Or paste a note
+        <textarea id="miText" rows="7" placeholder="# Project name&#10;&#10;Project TODO’s&#10;- [ ] …" autocomplete="off" spellcheck="false"></textarea>
+      </label>
+      <div id="miPreview" aria-live="polite"></div>
+      <footer>
+        <button class="btn ghost" value="cancel">Cancel</button>
+        <button type="button" class="btn" data-act="md-import" id="miGo" disabled>Import</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <dialog id="pasteDlg" aria-labelledby="pd-title">
+    <form method="dialog" class="sheet">
+      <h2 id="pd-title">Paste the answer</h2>
+      <p class="hint" id="pdHint"></p>
+      <textarea id="pdText" rows="12" class="paste-box" aria-labelledby="pd-title" autocomplete="off" spellcheck="false"></textarea>
+      <p class="note" id="pdPreview" aria-live="polite"></p>
+      <footer>
+        <button class="btn ghost" value="cancel">Cancel</button>
+        <button type="button" class="btn" data-act="paste-apply" id="pdGo" disabled>Fill in the page</button>
+      </footer>
+    </form>
+  </dialog>
+  <div class="picker" id="picker" role="dialog" aria-labelledby="pickHead" hidden>
+    <p class="pick-head" id="pickHead"></p>
+    <input id="pickQ" role="combobox" aria-controls="pickList" aria-expanded="true" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+    <div class="pick-list" id="pickList" role="listbox"></div>
+  </div>
 
   <dialog id="settings" aria-labelledby="set-title">
     <form method="dialog" class="sheet">
@@ -164,9 +204,28 @@
           <label class="ef">Name <input id="meName" autocomplete="off" autocorrect="off" spellcheck="false"></label>
           <label class="ef">Signature <textarea id="meSignature" rows="3" placeholder="Used for {{signature}}. Leave empty to use your name." autocorrect="off" spellcheck="false"></textarea></label>
           <label class="ef">Default language
-            <select id="meLang"><option value="en">English</option><option value="es">Spanish</option></select>
+            <select id="meLang"><option value="en">English</option><option value="es">Spanish</option><option value="fr">French</option><option value="it">Italian</option></select>
           </label>
         </div>
+      </section>
+      <section>
+        <h3>Language review and copywriting</h3>
+        <label class="ef">Open requests in
+          <select id="assistant">
+            <option value="claude-desktop">Claude, in the desktop app</option>
+            <option value="claude-web">Claude, in your browser</option>
+            <option value="chatgpt">ChatGPT, in your browser (sends right away)</option>
+            <option value="gemini">Gemini (the request is copied to paste)</option>
+            <option value="copy">Copy the request only</option>
+          </select>
+        </label>
+        <p class="hint">Review and Draft buttons write the request for you and open it in your assistant, signed in with your own account. Nothing is sent until you press send there, except with ChatGPT, which sends straight away.</p>
+      </section>
+      <section>
+        <h3>Schedule for new projects</h3>
+        <label class="ef">One phase per line
+          <textarea id="defSchedule" rows="5" autocorrect="off" spellcheck="false"></textarea>
+        </label>
       </section>
       <section>
         <h3>Working hours for new days</h3>
@@ -184,6 +243,7 @@
           <dt><kbd data-alt>Option</kbd>+<kbd>↑</kbd> <kbd>↓</kbd></dt><dd>Move the line, or the whole project</dd>
           <dt><kbd>←</kbd> <kbd>→</kbd> <kbd>T</kbd></dt><dd>Previous day, next day, today (when not typing)</dd>
           <dt><kbd>N</kbd></dt><dd>Add a task (when not typing)</dd>
+          <dt><kbd data-mod>⌘</kbd>+<kbd>L</kbd></dt><dd>Link a task to a project or one of its to-dos</dd>
           <dt><kbd data-mod>⌘</kbd>+<kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></dt><dd>Plan, Projects, Mail</dd>
         </dl>
         <p class="hint">Write a duration anywhere in a line, like 15m, 2h or 1h30, and it counts toward the time left.</p>
