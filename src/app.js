@@ -1,8 +1,8 @@
 /* Valleverde PM: the interface. Logic that doesn't touch the page lives in core.js. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.5.1';
-  const SCHEMA = 5;
+  const APP_VERSION = '0.6.2';
+  const SCHEMA = 6;
   const C = globalThis.Core;
 
   const $ = (s, r = document) => r.querySelector(s);
@@ -32,7 +32,8 @@
         reveal: () => invoke('reveal_data_file'),
         open: url => invoke('open_external', { url }),
         saveText: (name, content) => invoke('save_text_file', { name, content }),
-        saveTexts: files => invoke('save_text_files', { files })
+        saveTexts: files => invoke('save_text_files', { files }),
+        fetchCalendar: url => invoke('fetch_calendar', { url })
       };
     }
     const KEY = 'valleverde-pm-v2';
@@ -43,7 +44,8 @@
       mtime: async () => 0,
       open: async url => { window.open(url, '_blank', 'noopener'); },
       saveText: async (name, content) => { download(name, content); return 'your downloads'; },
-      saveTexts: async files => { for (const f of files) download(f.name, f.content); return 'your downloads'; }
+      saveTexts: async files => { for (const f of files) download(f.name, f.content); return 'your downloads'; },
+      fetchCalendar: async () => { throw new Error('Calendar addresses refresh in the desktop app. Here, import an .ics file instead.'); }
     };
     function download(name, content) {
       const a = document.createElement('a');
@@ -59,11 +61,14 @@
   let info = { path: null, dir: null };
   let readOnly = '';
   let lastMtime = 0, dirty = false, saveTimer = 0, saving = Promise.resolve();
+  // What this window last wrote, when, and a count of edits, so a reload never drops typing in progress.
+  let lastWritten = '', lastSavedAt = 0, edits = 0;
   const ui = {
     view: 'plan', date: today(), today: today(),
     project: null, selecting: false, sel: new Set(), dateEdit: null,
     sheetTab: 'project', copyLang: null, openPages: new Set(), briefOpen: false,
-    mail: { tpl: null, project: '', lang: null, to: '', toTouched: false, fields: {}, editing: false }
+    mail: { tpl: null, project: '', lang: null, editing: false, editText: false },
+    openCats: new Set(), renameCat: null
   };
 
   function blank() {
@@ -71,9 +76,10 @@
       app: 'valleverde-pm', schema: SCHEMA,
       settings: {
         begin: '09:30', end: '18:30', me: { name: '', signature: '', lang: 'en' },
-        projectSort: 'number', defaultSchedule: C.DEFAULT_SCHEDULE.slice(), assistant: 'claude-desktop'
+        defaultSchedule: C.DEFAULT_SCHEDULE.slice(), assistant: 'claude-desktop',
+        meetingsInBudget: true, calendarHint: true
       },
-      weeks: {}, days: {}, projects: [], templates: []
+      weeks: {}, days: {}, projects: [], templates: [], templateCats: [], calendars: [], drafts: {}, meetings: {}
     };
   }
   function normalizeData(o) {
@@ -95,7 +101,8 @@
     const me = (o.settings && o.settings.me) || {};
     b.settings.me = { name: str(me.name), signature: str(me.signature), lang: okLang(me.lang) };
     b.settings.assistant = C.ASSISTANTS[o.settings && o.settings.assistant] ? o.settings.assistant : 'claude-desktop';
-    if (['number', 'deadline', 'name'].includes(o.settings && o.settings.projectSort)) b.settings.projectSort = o.settings.projectSort;
+    if (o.settings && o.settings.meetingsInBudget === false) b.settings.meetingsInBudget = false;
+    if (o.settings && o.settings.calendarHint === false) b.settings.calendarHint = false;
     if (o.settings && Array.isArray(o.settings.defaultSchedule)) b.settings.defaultSchedule = o.settings.defaultSchedule.map(str).filter(x => x.trim());
     b.projects = arr(o.projects).map(p => {
       const pf = p.fields || {};
@@ -112,8 +119,36 @@
         fields, schedule, todos: C.normalize(arr(p.todos).map(line), 1), copy: normalizeCopy(p.copy)
       };
     });
-    for (const p of b.projects) if (!p.num) p.num = C.nextNumber(b.projects);
-    b.templates = arr(o.templates).map(t => ({ id: String(t.id || uid()), name: str(t.name), ...Object.fromEntries(C.LANGS.map(l => [l, part(t[l])])) }));
+    // Until 0.5 the number was set by hand; from 0.6 it is the position in the list, in the same order as before.
+    if (!(o.schema >= 6)) b.projects.sort((x, y) => (x.num || 1e9) - (y.num || 1e9));
+    C.renumberProjects(b.projects);
+    b.templateCats = arr(o.templateCats).map(c => ({ id: String(c.id || uid()), name: str(c.name), ...(c.collapsed ? { collapsed: true } : {}) }));
+    const cats = new Set(b.templateCats.map(c => c.id));
+    b.templates = arr(o.templates).map(t => ({
+      id: String(t.id || uid()), name: str(t.name), cat: cats.has(t.cat) ? t.cat : '',
+      ...Object.fromEntries(C.LANGS.map(l => [l, part(t[l])]))
+    }));
+    // Until 0.5 the list was sorted by name: keep that order as the starting point.
+    if (!(o.schema >= 6)) b.templates.sort((x, y) => x.name.localeCompare(y.name));
+    b.calendars = arr(o.calendars).map(normalizeCalendar).filter(Boolean);
+    for (const [k, list] of Object.entries(o.meetings && typeof o.meetings === 'object' ? o.meetings : {})) {
+      if (!C.isDate(k)) continue;
+      const ms = arr(list).filter(m => C.isTime(m.start) && (C.isTime(m.end) || m.end === '24:00')).map(m => ({
+        id: String(m.id || uid()), start: m.start, end: m.end, title: str(m.title),
+        ...(m.ref && m.ref.p ? { ref: { p: String(m.ref.p) } } : {})
+      }));
+      if (ms.length) b.meetings[k] = ms;
+    }
+    const month = Date.now() - 31 * 864e5;
+    for (const [k, d] of Object.entries(o.drafts && typeof o.drafts === 'object' ? o.drafts : {})) {
+      if (!d || typeof d !== 'object' || !(d.at > month) || !b.templates.some(t => k.startsWith(t.id + '|'))) continue;
+      const fields = {};
+      for (const [n, v] of Object.entries(d.fields || {})) if (typeof v === 'string' && v) fields[n] = v;
+      const text = {};
+      for (const l of C.LANGS) if (d.text && d.text[l] && typeof d.text[l].body === 'string') text[l] = part(d.text[l]);
+      b.drafts[k] = { at: d.at, to: str(d.to), toTouched: !!d.toTouched, fields, text };
+    }
+    if (Number.isFinite(o.savedAt)) b.savedAt = o.savedAt;
     for (const [k, w] of Object.entries(o.weeks || {})) {
       if (!C.isDate(k) || !w) continue;
       b.weeks[k] = { goals: arr(w.goals).map(g => ({ ...line(g), level: 0 })) };
@@ -129,6 +164,23 @@
       b.days[k] = day;
     }
     return b;
+  }
+
+  const CAL_COLORS = ['#3d7a50', '#3a6ea5', '#b0573b', '#8a5bb0', '#b08a2e', '#3a8f8f'];
+  function normalizeCalendar(c) {
+    const str = v => (typeof v === 'string' ? v : '');
+    if (!c.id) return null;
+    const cal = {
+      id: String(c.id), name: str(c.name), url: str(c.url), color: /^#[0-9a-f]{6}$/i.test(c.color) ? c.color : CAL_COLORS[0], hidden: !!c.hidden
+    };
+    // Imported files keep their events in the data file; addresses keep only the address and refresh on each Mac.
+    if (!cal.url) {
+      cal.file = str(c.file);
+      cal.imported = Number(c.imported) || 0;
+      cal.tz = c.tz && typeof c.tz === 'object' ? c.tz : {};
+      cal.events = Array.isArray(c.events) ? c.events.filter(e => e && typeof e === 'object' && typeof e.s === 'string') : [];
+    }
+    return cal;
   }
 
   function normalizeCopy(c) {
@@ -160,10 +212,14 @@
     }
     if (parsed && parsed.schema > SCHEMA) readOnly = 'This data file was saved by a newer version of Valleverde PM. Update the app to edit it; nothing will be saved until then.';
     D = normalizeData(parsed);
+    lastWritten = r.content || '';
+    lastSavedAt = D.savedAt || 0;
+    calCache.clear();
   }
 
   function changed() {
     if (readOnly) return;
+    edits++;
     dirty = true;
     clearTimeout(saveTimer);
     saveTimer = setTimeout(flush, 300);
@@ -172,10 +228,12 @@
     clearTimeout(saveTimer);
     if (!dirty || readOnly) return saving;
     dirty = false;
+    D.savedAt = Math.max(Date.now(), lastSavedAt + 1);
+    lastSavedAt = D.savedAt;
     const content = JSON.stringify(D, null, 1);
     saving = saving
       .then(() => Backend.save(content))
-      .then(m => { lastMtime = m || lastMtime; setSaveError(''); })
+      .then(m => { lastMtime = m || lastMtime; lastWritten = content; setSaveError(''); })
       .catch(e => { dirty = true; setSaveError(String(e && e.message || e)); });
     return saving;
   }
@@ -185,17 +243,35 @@
     el.title = msg ? `${msg}\nClick to try again.` : '';
   }
 
+  // When the window comes back, pick up changes saved by another Mac. Anything typed in the meantime wins,
+  // and so does this window's data when the file on disk is an older copy (as iCloud sometimes puts back).
+  let checking = false;
   async function checkExternalChange() {
-    if (Backend.kind !== 'file' || dirty) return;
-    await saving;
-    let m = 0;
-    try { m = await Backend.mtime(); } catch { return; }
-    if (!m || !lastMtime || m === lastMtime || dirty) return;
+    if (Backend.kind !== 'file' || dirty || checking) return;
+    checking = true;
     try {
-      applyLoaded(await Backend.load());
+      await saving;
+      const seq = edits;
+      let m = 0;
+      try { m = await Backend.mtime(); } catch { return; }
+      if (!m || !lastMtime || m === lastMtime || dirty || edits !== seq) return;
+      let r;
+      try { r = await Backend.load(); } catch { return; }
+      if (dirty || edits !== seq) return;
+      lastMtime = r.mtime || m;
+      if (!r.content || r.content === lastWritten) return;
+      let theirs = null;
+      try { theirs = JSON.parse(r.content); } catch { return; }
+      if (theirs && Number.isFinite(theirs.savedAt) && theirs.savedAt < lastSavedAt) {
+        // An older copy came back: keep what this window has and write it again.
+        dirty = true;
+        flush();
+        return;
+      }
+      applyLoaded(r);
       render();
       toast('Updated with changes from the data file');
-    } catch {}
+    } finally { checking = false; }
   }
 
   /* ---------- days and weeks ---------- */
@@ -449,6 +525,81 @@
     focusGhost() { const g = this.el.querySelector('input[data-ghost]'); if (g) g.focus(); }
   }
 
+  /* ---------- reordering lists by their grip ----------
+     Works with a mouse, a trackpad or touch: press the dots and move. The arrow keys move a focused grip.
+     opts.accept(dragEl, targetEl) says where an item may land; opts.drop(dragEl, targetEl, where) applies it,
+     where is 'before', 'after' or 'into' (for opts.into targets, such as a category). */
+  function sortable(container, opts) {
+    let drag = null;
+    const item = opts.item || '[data-sort-id]';
+    const clear = () => { for (const el of container.querySelectorAll('.drop-before, .drop-after, .drop-into')) el.classList.remove('drop-before', 'drop-after', 'drop-into'); };
+    const stop = () => {
+      if (!drag) return;
+      clear();
+      drag.el.classList.remove('dragging');
+      document.body.classList.remove('sorting');
+      cancelAnimationFrame(drag.raf);
+      drag = null;
+    };
+    container.addEventListener('pointerdown', e => {
+      const g = e.target.closest('[data-grip]');
+      if (!g || !container.contains(g) || e.button !== 0 || readOnly) return;
+      const el = g.closest(item);
+      if (!el) return;
+      e.preventDefault();
+      g.focus({ preventScroll: true });
+      drag = { el, grip: g, y0: e.clientY, x: e.clientX, y: e.clientY, moved: false, target: null, raf: 0 };
+      try { g.setPointerCapture(e.pointerId); } catch {}
+    });
+    const track = () => {
+      if (!drag || !drag.moved) return;
+      const edge = 56, y = drag.y;
+      if (y < edge) window.scrollBy(0, -Math.ceil((edge - y) / 4));
+      else if (y > window.innerHeight - edge) window.scrollBy(0, Math.ceil((y - window.innerHeight + edge) / 4));
+      clear();
+      drag.target = null;
+      const under = document.elementFromPoint(drag.x, drag.y);
+      const t = under && under.closest(item);
+      if (t && t !== drag.el && container.contains(t) && !drag.el.contains(t) && opts.accept(drag.el, t)) {
+        const r = t.getBoundingClientRect();
+        const where = opts.into && opts.into(drag.el, t) ? 'into' : drag.y > r.top + r.height / 2 ? 'after' : 'before';
+        t.classList.add(`drop-${where}`);
+        drag.target = { el: t, where };
+      }
+      drag.raf = requestAnimationFrame(track);
+    };
+    container.addEventListener('pointermove', e => {
+      if (!drag) return;
+      drag.x = e.clientX; drag.y = e.clientY;
+      if (!drag.moved) {
+        if (Math.abs(e.clientY - drag.y0) < 4) return;
+        drag.moved = true;
+        drag.el.classList.add('dragging');
+        document.body.classList.add('sorting');
+        track();
+      }
+    });
+    container.addEventListener('pointerup', () => {
+      if (!drag) return;
+      const { el, target, moved } = drag;
+      stop();
+      if (moved && target) opts.drop(el, target.el, target.where);
+    });
+    container.addEventListener('pointercancel', stop);
+    container.addEventListener('keydown', e => {
+      const g = e.target.closest && e.target.closest('[data-grip]');
+      if (!g || readOnly || e.metaKey || e.ctrlKey || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
+      e.preventDefault();
+      const el = g.closest(item);
+      if (el && opts.step) opts.step(el, e.key === 'ArrowUp' ? -1 : 1);
+    });
+  }
+  // After a list is drawn again, put the focus back on the grip that was moved.
+  function refocusGrip(container, id) {
+    const g = container.querySelector(`[data-sort-id="${CSS.escape(id)}"] [data-grip]`);
+    if (g) g.focus({ preventScroll: true });
+  }
+
   /* ---------- outlines on the page ---------- */
   let goalsOL, tasksOL, projTodosOL;
   function onListChange(kind) {
@@ -513,8 +664,8 @@
       $('#view-' + v).hidden = ui.view !== v;
       $('#tab-' + v).setAttribute('aria-selected', String(ui.view === v));
     }
-    for (const el of document.querySelectorAll('[data-act="copy-day"], [data-act="copy-week"]')) el.hidden = ui.view !== 'plan';
-    $('#menu hr').hidden = ui.view !== 'plan';
+    $('#menuWrap').hidden = ui.view !== 'plan';
+    if (ui.view !== 'plan') toggleMenu(false);
     if (ui.view === 'projects') renderProjects();
     else if (ui.view === 'mail') renderMail();
     else renderPlan();
@@ -522,6 +673,7 @@
   function setView(v, opts = {}) {
     flush();
     closePicker();
+    sugHide();
     if (v !== 'projects') { ui.selecting = false; ui.sel.clear(); }
     ui.view = v;
     if ('project' in opts) ui.project = opts.project;
@@ -530,6 +682,7 @@
   }
   function renderPlan() {
     renderNav();
+    renderAgenda();
     renderBudget();
     $('#weekRange').textContent = C.fmtRange(week());
     goalsOL.render();
@@ -571,9 +724,10 @@
     } else {
       big.innerHTML = `${C.fmtDur(left)}<span class="unit"> left</span>`;
       const avail = C.available(day, ui.date, t, nowMin());
+      const meet = meetingsLeft(day, ui.date);
       if (avail === null) { slack.className = 'slack'; slack.textContent = ''; }
       else {
-        const f = avail - left;
+        const f = avail - left - (meet || 0);
         slack.className = f >= 0 ? 'slack free' : 'slack over';
         slack.textContent = f >= 0 ? `${C.fmtDur(f)} free` : `${C.fmtDur(-f)} over`;
       }
@@ -583,6 +737,9 @@
     if (document.activeElement !== e) e.value = day.end || '';
     b.disabled = e.disabled = !!readOnly;
     $('#doneTotal').textContent = !past && done ? `${C.fmtDur(done)} done` : '';
+    const meet = past ? null : meetingsLeft(day, ui.date);
+    $('#meetTotal').textContent = meet ? `${C.fmtDur(meet)} of meetings${ui.date === t ? ' left' : ''}` : '';
+    $('#meetTotal').title = meet ? 'Meetings in your working hours count against the free time. Change this in Settings, under Calendars.' : '';
     renderRibbon(day, left, past);
   }
 
@@ -616,6 +773,15 @@
       m.className = 'endmark';
       m.style.left = pct(total);
       r.append(m);
+    }
+    // Meetings, at their own times, as a band along the bottom.
+    if (D.settings.meetingsInBudget) {
+      const base = C.parseYmd(ui.date).getTime();
+      for (const o of dayEvents(ui.date)) {
+        if (o.allDay || !o.busy) continue;
+        const from = Math.max(0, (o.start - base) / 60000 - b), to = Math.min(total, (o.end - base) / 60000 - b);
+        if (to > from) add('meet', from, to);
+      }
     }
     if (isToday && now >= b && now <= e) {
       const m = document.createElement('span');
@@ -654,21 +820,371 @@
     }
   }
 
+  /* ---------- calendars ----------
+     A calendar added by its secret address keeps only the address in the data file. Its events are fetched by the
+     app (never by this page) and kept on this Mac, so a background refresh never rewrites your data file.
+     A calendar imported from an .ics file keeps its events in the data file. */
+  const FETCHED_KEY = 'valleverde-pm-calendar-events';
+  const REFRESH_EVERY = 15 * 60 * 1000;
+  let fetched = {};
+  try { fetched = JSON.parse(localStorage.getItem(FETCHED_KEY) || '{}') || {}; } catch { fetched = {}; }
+  const saveFetched = () => { try { localStorage.setItem(FETCHED_KEY, JSON.stringify(fetched)); } catch {} };
+  const calCache = new Map();
+  const calById = id => D.calendars.find(c => c.id === id) || null;
+  const calSource = c => (c.url ? fetched[c.id] || { tz: {}, events: [] } : c);
+  // Occurrences around a date, from every calendar that's shown, cached per calendar and week.
+  function eventsAround(date) {
+    const from = C.addDays(C.mondayOf(date), -1), to = C.addDays(from, 9);
+    let out = [];
+    for (const c of D.calendars) {
+      if (c.hidden) continue;
+      const src = calSource(c);
+      const key = `${c.id}|${from}|${src.at || c.imported || 0}|${(src.events || []).length}`;
+      let hit = calCache.get(c.id);
+      if (!hit || hit.key !== key) {
+        let occ = [];
+        try { occ = C.expandCalendar({ id: c.id, tz: src.tz || {}, events: src.events || [] }, from, to); } catch (e) { console.error(e); }
+        hit = { key, occ };
+        calCache.set(c.id, hit);
+      }
+      out = out.concat(hit.occ);
+    }
+    return out;
+  }
+  // Meetings you type in the plan: one-off, kept per day in the data file, shown with your calendars.
+  const MINE = { id: 'mine', name: 'My meetings', color: '#b08a2e' };
+  const myMeetings = date => (D.meetings[date] || []);
+  function myOccurrences(date) {
+    const base = C.parseYmd(date).getTime();
+    return myMeetings(date).map(m => ({
+      id: `mine:${m.id}`, mid: m.id, mine: true, cal: 'mine', title: m.title, loc: '', allDay: false, busy: true,
+      start: base + C.toMin(m.start) * 60000, end: base + (m.end === '24:00' ? 1440 : C.toMin(m.end)) * 60000, ref: m.ref
+    }));
+  }
+  function dayEvents(date) {
+    // The same event in two calendars (an invitation in a shared calendar, or a calendar imported twice) shows once.
+    const seen = new Set();
+    const theirs = (D.calendars.length ? C.eventsOn(eventsAround(date), date) : []).filter(o => {
+      const k = `${o.title.trim().toLowerCase()}|${o.allDay ? `${o.sd}|${o.ed}` : `${o.start}|${o.end}`}`;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+    return theirs.concat(myOccurrences(date))
+      .sort((a, b) => (a.allDay !== b.allDay ? (a.allDay ? -1 : 1) : (a.start || 0) - (b.start || 0) || a.title.localeCompare(b.title)));
+  }
+  // Busy meeting minutes still ahead in the working day, or null when meetings don't count.
+  function meetingsLeft(day, date) {
+    if (!D.settings.meetingsInBudget || (!D.calendars.length && !myMeetings(date).length)) return null;
+    const b = C.toMin(day.begin), e = C.toMin(day.end), t = today();
+    if (b === null || e === null || e <= b || date < t) return null;
+    return C.busyMinutes(dayEvents(date), date, date === t ? Math.max(b, nowMin()) : b, e);
+  }
+
+  let refreshing = null;
+  async function refreshCalendars(force) {
+    if (refreshing) return refreshing;
+    const due = D.calendars.filter(c => c.url && (force || !fetched[c.id] || Date.now() - (fetched[c.id].at || 0) > REFRESH_EVERY));
+    if (!due.length) return null;
+    renderAgendaInfo(true);
+    refreshing = (async () => {
+      for (const c of due) {
+        try {
+          const parsed = C.parseIcs(await Backend.fetchCalendar(c.url), new Date(Date.now() - 62 * 864e5));
+          fetched[c.id] = { at: Date.now(), ok: Date.now(), tz: parsed.tz, events: parsed.events, error: '' };
+        } catch (e) {
+          fetched[c.id] = { ...(fetched[c.id] || { tz: {}, events: [] }), at: Date.now(), error: String((e && e.message) || e) };
+        }
+        calCache.delete(c.id);
+      }
+      saveFetched();
+    })();
+    try { await refreshing; } finally {
+      refreshing = null;
+      if (ui.view === 'plan') { renderAgenda(); renderBudget(); }
+      if ($('#settings').open) renderCalList();
+    }
+    return null;
+  }
+
+  const fmtClock = ms => new Date(ms).toTimeString().slice(0, 5);
+  function renderAgendaInfo(busy) {
+    const btn = $('#calRefreshBtn');
+    btn.hidden = !D.calendars.some(c => c.url && !c.hidden);
+    btn.disabled = !!busy;
+    btn.textContent = busy ? 'Refreshing…' : 'Refresh';
+    $('#calConnectBtn').hidden = !!D.calendars.length || !!readOnly;
+  }
+  // What's being typed in the agenda survives a redraw (the 30-second clock tick, a calendar refresh).
+  const agendaFocus = () => {
+    const el = document.activeElement;
+    if (!el || !el.closest || !el.closest('#agenda') || el.tagName !== 'INPUT') return null;
+    const row = el.closest('[data-mid]');
+    return { mid: row ? row.dataset.mid : null,
+      field: el.hasAttribute('data-mtime') ? 'mtime' : el.hasAttribute('data-mtitle') ? 'mtitle' : 'mghost',
+      value: el.value, a: el.selectionStart, b: el.selectionEnd };
+  };
+  function renderAgenda() {
+    const box = $('#agenda');
+    const f = agendaFocus();
+    $('#agendaBlock').hidden = !!readOnly && !dayEvents(ui.date).length;
+    renderAgendaInfo(!!refreshing);
+    const shown = D.calendars.filter(c => !c.hidden);
+    const evs = dayEvents(ui.date);
+    const now = Date.now();
+    const timed = evs.filter(o => !o.allDay);
+    const busy = C.busyMinutes(evs, ui.date, 0, 1440);
+    $('#agendaInfo').textContent = timed.length ? `${timed.length} ${timed.length === 1 ? 'meeting' : 'meetings'}${busy ? `, ${C.fmtDur(busy)}` : ''}` : '';
+    const errors = shown.filter(c => c.url && fetched[c.id] && fetched[c.id].error);
+    const waiting = shown.filter(c => c.url && !(fetched[c.id] && fetched[c.id].ok));
+    const ro = readOnly ? ' readonly' : '';
+    let h = evs.map(o => {
+      const c = o.mine ? MINE : calById(o.cal) || {};
+      const link = C.eventLink(o);
+      const past = !o.allDay && o.end <= now && o.end > o.start;
+      const live = !o.allDay && o.start <= now && now < o.end;
+      const cls = `ev${past ? ' past' : ''}${live ? ' live' : ''}${o.allDay ? ' allday' : ''}${o.busy || o.allDay ? '' : ' free'}${o.mine ? ' mine' : ''}`;
+      const join = link ? `<button type="button" class="link ev-join" data-act="ev-open" data-url="${esc(link)}">${live || (!past && o.start - now < 15 * 60000) ? 'Join' : 'Link'}</button>` : '';
+      if (o.mine) {
+        const m = myMeetings(ui.date).find(x => x.id === o.mid);
+        const p = m.ref && proj(m.ref.p);
+        return `<div class="${cls}" data-mid="${esc(m.id)}">` +
+          `<span class="ev-dot" style="background:${MINE.color}" title="${MINE.name}"></span>` +
+          `<input class="ev-time-in" data-mtime value="${esc(C.meetingLabel(m))}" aria-label="Time of ${esc(m.title || 'the meeting')}" title="Change the time, like 10:00–11:00 or 10:00 1h" ${INPUT_ATTRS}${ro}>` +
+          `<input class="ev-title-in" data-mtitle value="${esc(m.title)}" aria-label="Meeting" placeholder="Meeting" ${INPUT_ATTRS}${ro}>` +
+          (p ? `<button type="button" class="pchip" data-act="open-project" data-pid="${esc(p.id)}" title="Open ${esc(projectTitle(p))}">${esc(projectTitle(p))}</button>` : '') +
+          join + (readOnly ? '' : '<button type="button" class="link ev-del" data-act="meeting-remove" title="Remove this meeting">Remove</button>') + '</div>';
+      }
+      const where = o.loc && !/^https?:\/\//i.test(o.loc) ? o.loc : '';
+      return `<div class="${cls}" title="${esc([o.title, where, c.name].filter(Boolean).join('\n'))}">` +
+        `<span class="ev-dot" style="background:${esc(c.color || CAL_COLORS[0])}"></span>` +
+        `<span class="ev-time">${esc(C.eventTime(o, ui.date))}</span>` +
+        `<span class="ev-title">${esc(o.title || 'Busy')}${where ? `<span class="ev-where">${esc(where)}</span>` : ''}</span>` + join + '</div>';
+    }).join('');
+    if (!evs.length && shown.length) h = `<p class="empty">${waiting.length && refreshing ? 'Loading your calendar…' : waiting.length && !errors.length ? 'Not loaded yet.' : 'No meetings.'}</p>`;
+    if (!readOnly) h += '<div class="ev ev-add"><span class="ev-dot add" aria-hidden="true"></span>' +
+      `<input class="ev-ghost-in" data-mghost value="${esc(ui.meetingText || '')}" placeholder="Add a meeting, like “10:00 Partena kick-off”" aria-label="Add a meeting: start with its time" ${INPUT_ATTRS}>` +
+      '<span class="note ev-hint" id="meetingHint"></span></div>';
+    if (errors.length) h += `<p class="ev-error">Couldn’t refresh ${errors.map(c => esc(c.name || 'a calendar')).join(', ')}: ${esc(fetched[errors[0].id].error)} <button type="button" class="link" data-act="settings">Calendars</button></p>`;
+    box.innerHTML = h;
+    meetingHint();
+    if (f) {
+      const sel = f.field === 'mghost' ? '[data-mghost]' : `[data-mid="${CSS.escape(f.mid || '')}"] [data-${f.field}]`;
+      const el = box.querySelector(sel);
+      if (el) {
+        if (f.field !== 'mghost') el.value = f.value;
+        el.focus({ preventScroll: true });
+        try { el.setSelectionRange(f.a, f.b); } catch {}
+      }
+    }
+  }
+  // Under the add line: what will be added, or how to write it.
+  function meetingHint() {
+    const el = $('#meetingHint');
+    if (!el) return;
+    const t = (ui.meetingText || '').trim();
+    const m = t && C.parseMeeting(t);
+    el.textContent = !t ? '' : m ? `${C.meetingLabel(m)}${m.title ? '' : ', add a title'}. Return to add it` : 'Start with the time, like 10:00 or 10:00–11:30';
+    el.classList.toggle('bad', !!t && !m);
+  }
+  function addMeeting() {
+    const t = (ui.meetingText || '').trim();
+    const m = t && C.parseMeeting(t);
+    if (!m || readOnly) { meetingHint(); return; }
+    const p = ui.meetingRef && proj(ui.meetingRef);
+    const meeting = { id: uid(), start: m.start, end: m.end, title: m.title || 'Meeting', ...(p && m.title.toLowerCase().includes(p.name.trim().toLowerCase()) ? { ref: { p: p.id } } : {}) };
+    (D.meetings[ui.date] ||= []).push(meeting);
+    D.meetings[ui.date].sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
+    ui.meetingText = '';
+    ui.meetingRef = null;
+    changed();
+    renderAgenda();
+    renderBudget();
+    const g = $('#agenda [data-mghost]');
+    if (g) g.focus();
+  }
+  function removeMeeting(id) {
+    const list = myMeetings(ui.date);
+    const i = list.findIndex(x => x.id === id);
+    if (i < 0 || readOnly) return;
+    list.splice(i, 1);
+    if (!list.length) delete D.meetings[ui.date];
+    changed();
+    renderAgenda();
+    renderBudget();
+  }
+  const meetingOf = el => { const row = el.closest('[data-mid]'); return row ? myMeetings(ui.date).find(x => x.id === row.dataset.mid) : null; };
+  $('#agenda').addEventListener('input', e => {
+    const el = e.target;
+    if (el.hasAttribute('data-mghost')) { ui.meetingText = el.value; if (!el.value.trim()) ui.meetingRef = null; meetingHint(); return; }
+    const m = meetingOf(el);
+    if (!m || readOnly || !el.hasAttribute('data-mtitle')) return;
+    m.title = el.value;
+    const p = m.ref && proj(m.ref.p);
+    if (p && !m.title.toLowerCase().includes(p.name.trim().toLowerCase())) { delete m.ref; const chip = el.parentElement.querySelector('.pchip'); if (chip) chip.remove(); }
+    changed();
+  });
+  $('#agenda').addEventListener('change', e => {
+    const el = e.target;
+    const m = el.hasAttribute('data-mtime') && meetingOf(el);
+    if (!m || readOnly) return;
+    const len = C.toMin(m.end === '24:00' ? '23:59' : m.end) - C.toMin(m.start);
+    const t = C.parseMeetingTime(el.value, len > 0 ? len : 30);
+    if (!t) { el.value = C.meetingLabel(m); toast('Write the time like 10:00, 10:00–11:30 or 10:00 1h'); return; }
+    Object.assign(m, t);
+    myMeetings(ui.date).sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
+    changed();
+    el.blur();
+    renderAgenda();
+    renderBudget();
+  });
+  $('#agenda').addEventListener('keydown', e => {
+    const el = e.target;
+    if (e.isComposing || el.tagName !== 'INPUT') return;
+    if (e.key === 'Escape') { el.blur(); return; }
+    if (el.hasAttribute('data-mghost')) { if (e.key === 'Enter') { e.preventDefault(); addMeeting(); } return; }
+    if (e.key === 'Enter') { e.preventDefault(); if (el.hasAttribute('data-mtime')) el.blur(); else { const g = $('#agenda [data-mghost]'); if (g) g.focus(); } return; }
+    if (e.key === 'Backspace' && el.hasAttribute('data-mtitle') && !el.value) {
+      e.preventDefault();
+      const m = meetingOf(el);
+      if (m) { removeMeeting(m.id); const g = $('#agenda [data-mghost]'); if (g) g.focus(); }
+    }
+  });
+  function agendaLines(date) {
+    return dayEvents(date).map(o => `${C.eventTime(o, date)} ${o.title || 'Busy'}`);
+  }
+
+  /* the calendar list in Settings */
+  function calStatus(c) {
+    if (!c.url) {
+      const n = (c.events || []).length;
+      return `Imported${c.file ? ` from ${c.file}` : ''}${c.imported ? ` on ${C.fmtShort(C.ymd(new Date(c.imported)))}` : ''}, ${n} ${n === 1 ? 'event' : 'events'}`;
+    }
+    const f = fetched[c.id];
+    if (refreshing && (!f || !f.ok)) return 'Loading…';
+    if (!f) return 'Not loaded yet';
+    if (f.error) return `Couldn’t refresh: ${f.error}`;
+    return `Updated ${C.ymd(new Date(f.ok)) === today() ? `at ${fmtClock(f.ok)}` : C.fmtShort(C.ymd(new Date(f.ok)))}`;
+  }
+  function renderCalList() {
+    const ro = readOnly ? ' disabled' : '';
+    $('#calList').innerHTML = D.calendars.length ? D.calendars.map(c =>
+      `<div class="cal" data-cal="${esc(c.id)}"><span class="ev-dot" style="background:${esc(c.color)}"></span>` +
+      `<div class="cal-main"><input class="cal-name" data-cal-name value="${esc(c.name)}" aria-label="Calendar name" placeholder="Calendar" ${INPUT_ATTRS}${readOnly ? ' readonly' : ''}>` +
+      `<span class="note${c.url && fetched[c.id] && fetched[c.id].error ? ' bad' : ''}">${esc(calStatus(c))}</span></div>` +
+      `<label class="check small"><input type="checkbox" data-cal-show${c.hidden ? '' : ' checked'}${ro}> Show</label>` +
+      (c.url ? `<button type="button" class="link" data-act="cal-refresh-one"${ro}>Refresh</button>` : `<button type="button" class="link" data-act="cal-file"${ro} title="Choose the file again to update this calendar">Update</button>`) +
+      `<button type="button" class="link danger" data-act="cal-remove"${ro}>Remove</button></div>`).join('')
+      : '<p class="hint">No calendars yet.</p>';
+    $('#meetingsInBudget').checked = D.settings.meetingsInBudget;
+    $('#meetingsInBudget').disabled = !!readOnly;
+  }
+  $('#calList').addEventListener('input', e => {
+    const c = e.target.hasAttribute('data-cal-name') && calById(e.target.closest('[data-cal]').dataset.cal);
+    if (!c || readOnly) return;
+    c.name = e.target.value;
+    changed();
+  });
+  $('#calList').addEventListener('change', e => {
+    const c = e.target.hasAttribute('data-cal-show') && calById(e.target.closest('[data-cal]').dataset.cal);
+    if (!c || readOnly) return;
+    c.hidden = !e.target.checked;
+    changed();
+    if (ui.view === 'plan') { renderAgenda(); renderBudget(); }
+    if (!c.hidden) refreshCalendars();
+  });
+  $('#meetingsInBudget').addEventListener('change', e => {
+    if (readOnly) return;
+    D.settings.meetingsInBudget = e.target.checked;
+    changed();
+    renderBudget();
+  });
+
+  function openCalAdd() {
+    if (readOnly) return;
+    $('#caUrl').value = '';
+    $('#caName').value = '';
+    $('#caState').textContent = '';
+    $('#caGo').disabled = false;
+    $('#calAdd').showModal();
+    $('#caUrl').focus();
+  }
+  const nextColor = () => CAL_COLORS[D.calendars.length % CAL_COLORS.length];
+  async function saveCalAdd() {
+    const url = $('#caUrl').value.trim().replace(/^webcals?:\/\//i, 'https://');
+    if (!/^https:\/\/\S+$/i.test(url)) { $('#caState').textContent = 'Paste an address that starts with https:// or webcal://.'; return; }
+    if (D.calendars.some(c => c.url === url)) { $('#caState').textContent = 'That calendar is already in your list.'; return; }
+    $('#caGo').disabled = true;
+    $('#caState').textContent = 'Reading the calendar…';
+    let parsed;
+    try { parsed = C.parseIcs(await Backend.fetchCalendar(url), new Date(Date.now() - 62 * 864e5)); }
+    catch (e) { $('#caState').textContent = String((e && e.message) || e); $('#caGo').disabled = false; return; }
+    const c = { id: uid(), name: $('#caName').value.trim() || parsed.name || 'Calendar', url, color: nextColor(), hidden: false };
+    D.calendars.push(c);
+    fetched[c.id] = { at: Date.now(), ok: Date.now(), tz: parsed.tz, events: parsed.events, error: '' };
+    saveFetched();
+    D.settings.calendarHint = true;
+    changed();
+    $('#calAdd').close();
+    if ($('#settings').open) renderCalList();
+    if (ui.view === 'plan') { renderAgenda(); renderBudget(); }
+    toast(`Added ${c.name}`);
+  }
+  $('#caUrl').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); saveCalAdd(); } });
+  $('#caName').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); saveCalAdd(); } });
+  // One calendar from an iCalendar text. A file imported again under the same name updates its calendar.
+  function importIcs(fileName, text) {
+    const parsed = C.parseIcs(text, new Date(Date.now() - 62 * 864e5));
+    let c = D.calendars.find(x => !x.url && x.file === fileName);
+    const fresh = !c;
+    if (!c) { c = { id: uid(), name: parsed.name || fileName.replace(/\.(ics|ical|icalendar|ifb|vcs)$/i, ''), url: '', color: nextColor(), hidden: false, file: fileName }; D.calendars.push(c); }
+    Object.assign(c, { tz: parsed.tz, events: parsed.events, imported: Date.now() });
+    calCache.delete(c.id);
+    return { c, fresh, n: parsed.events.length };
+  }
+  const isCalendarText = t => /^\s*(\ufeff)?BEGIN:VCALENDAR/i.test(t.slice(0, 2000));
+  $('#icsFile').addEventListener('change', async e => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file || readOnly) return;
+    if (file.size > 150e6) { toast(`${file.name} is too large to import (${Math.round(file.size / 1e6)} MB).`); return; }
+    let sources = [];
+    try {
+      const buf = await file.arrayBuffer();
+      const head = new Uint8Array(buf, 0, Math.min(4, buf.byteLength));
+      if (head[0] === 0x50 && head[1] === 0x4b) {
+        // Google Calendar's export: a zip with one .ics file per calendar.
+        let files;
+        try { files = await C.unzip(buf, ['.ics', '.ical', '.icalendar']); }
+        catch (err) {
+          toast(String(err && err.message) === 'no inflate' ? 'This version of macOS can’t open the zip here. Double-click it in Finder, then import the .ics files inside.' : `${file.name} couldn’t be opened as a zip.`);
+          return;
+        }
+        sources = files.map(f => ({ name: f.name, text: new TextDecoder().decode(f.bytes) })).filter(f => isCalendarText(f.text));
+        if (!sources.length) { toast(`${file.name} has no calendar (.ics) files in it.`); return; }
+      } else {
+        const text = new TextDecoder().decode(buf);
+        if (!isCalendarText(text)) { toast(`${file.name} isn’t a calendar file. Export the calendar as .ics, or as Google’s .zip.`); return; }
+        sources = [{ name: file.name, text }];
+      }
+    } catch { toast(`${file.name} couldn’t be read.`); return; }
+    const done = sources.map(f => importIcs(f.name, f.text));
+    D.settings.calendarHint = true;
+    changed();
+    if ($('#settings').open) renderCalList();
+    if (ui.view === 'plan') { renderAgenda(); renderBudget(); }
+    if (done.length === 1) toast(`${done[0].fresh ? 'Added' : 'Updated'} ${done[0].c.name}: ${done[0].n} ${done[0].n === 1 ? 'event' : 'events'}`);
+    else toast(`Imported ${done.length} calendars: ${done.map(x => x.c.name).join(', ')}`);
+  });
+
   /* ---------- projects ---------- */
   const proj = id => D.projects.find(p => p.id === id) || null;
   const projectTitle = p => `#${p.num} ${p.name.trim() || 'Untitled project'}`;
   const nameEq = (a, b) => C.label(a).trim().toLowerCase() === C.label(b).trim().toLowerCase();
   const openTodos = p => p.todos.filter(t => !t.done && t.text.trim()).length;
-  const SORTS = {
-    number: (a, b) => a.num - b.num,
-    deadline: (a, b) => {
-      const da = a.fields.deadline || '9999', db = b.fields.deadline || '9999';
-      return da < db ? -1 : da > db ? 1 : a.num - b.num;
-    },
-    name: (a, b) => a.name.localeCompare(b.name) || a.num - b.num
-  };
-  const activeProjects = () => D.projects.filter(p => !p.archived).sort(SORTS.number);
-  const sorted = list => list.slice().sort(SORTS[D.settings.projectSort] || SORTS.number);
+  // The list order is the user's own: drag a project, and its number follows its place.
+  const byNum = (a, b) => a.num - b.num;
+  const activeProjects = () => D.projects.filter(p => !p.archived);
   const dueHtml = due => (due ? `<span class="due${due.late ? ' late' : due.soon ? ' soon' : ''}">${esc(due.text)}</span>` : '');
 
   // The project a plan line belongs to: its own link, or for an action, its project line's link.
@@ -726,10 +1242,223 @@
     }
   }
 
+  /* ---------- suggestions while typing in the plan, like a Many2one ----------
+     On a project line that isn't linked yet: your projects, filtered as you type, and Create project.
+     On an action under a linked project: that project's open to-dos, and Add as a to-do.
+     Nothing is chosen unless you pick it, so a line can always stay free text. */
+  const sug = { items: [], active: -1, key: null, dismissed: null, head: '' };
+  const sugBox = $('#suggest');
+  const SUG_INPUTS = '#tasks input.txt, #agenda input[data-mghost], #agenda input[data-mtitle]';
+  function sugContext() {
+    const el = document.activeElement;
+    if (readOnly || !el || !el.matches(SUG_INPUTS) || ui.view !== 'plan') return null;
+    // A meeting: projects whose name matches its title, so typing "10:00 Par" offers Partena.
+    if (el.closest('#agenda')) {
+      const ghost = el.hasAttribute('data-mghost');
+      const m = ghost ? null : meetingOf(el);
+      if (!ghost && (!m || m.ref)) return null;
+      if (ghost && ui.meetingRef) return null;
+      const parsed = ghost ? C.parseMeeting(el.value) : { title: el.value };
+      if (!parsed) return null;
+      return { el, meeting: true, ghost, m, key: ghost ? 'mghost' : `m:${m.id}`, level: -1, text: el.value, title: parsed.title };
+    }
+    if (el.hasAttribute('data-ghost')) return { el, ghost: true, key: 'ghost', level: 0, text: el.value };
+    const row = el.closest('.row[data-id]');
+    const L = viewDay(ui.date).lines;
+    const i = row ? L.findIndex(l => l.id === row.dataset.id) : -1;
+    if (i < 0) return null;
+    const line = L[i];
+    if (line.done || line.moved) return null;
+    const ctx = { el, ghost: false, key: line.id, line, i, L, level: line.level, text: el.value };
+    if (line.level === 0) return line.ref ? null : ctx;
+    if (line.ref && line.ref.t) return null;
+    ctx.project = lineProject(L, C.groupStart(L, i));
+    return ctx.project ? ctx : null;
+  }
+  const inPlan = p => viewDay(ui.date).lines.some(l => l.level === 0 && !l.done && l.ref && l.ref.p === p.id && !l.ref.t);
+  function sugBuild(ctx) {
+    if (ctx.meeting) {
+      const q = ctx.title.trim();
+      if (!q || q.length > 60) return { items: [], active: -1 };
+      const k = q.toLowerCase().replace(/^#/, '');
+      const found = activeProjects().filter(p => p.name.trim().toLowerCase().startsWith(k) || String(p.num) === k).slice(0, 12);
+      return { items: found.map(p => ({ act: 'meeting-project', p, label: projectTitle(p) })), active: found.length ? 0 : -1, head: 'Link the meeting to a project' };
+    }
+    const q = ctx.text.trim();
+    if (q.length > 60) return { items: [], active: -1 };
+    if (ctx.level === 0) {
+      if (C.duration(q)) return { items: [], active: -1 };
+      const found = C.findProjects(activeProjects(), q).slice(0, 50);
+      const items = found.map(p => ({ act: 'project', p, label: projectTitle(p), note: inPlan(p) ? 'In the plan' : '' }));
+      if (q.length >= 2 && !D.projects.some(p => nameEq(p.name, q))) items.push({ act: 'create', label: `Create project “${q}”`, quiet: true });
+      const k = q.toLowerCase().replace(/^#/, '');
+      const top = found[0];
+      const auto = !!(k && top && (top.name.trim().toLowerCase().startsWith(k) || String(top.num) === k));
+      return { items, active: auto ? 0 : -1, head: 'Link to a project' };
+    }
+    const p = ctx.project;
+    const used = new Set(ctx.L.filter(l => l.ref && l.ref.t && !l.moved).map(l => l.ref.t));
+    const qq = C.stripDuration(q).toLowerCase();
+    const todos = p.todos.filter(t => !t.done && t.text.trim() && !used.has(t.id) && (!qq || t.text.toLowerCase().includes(qq)));
+    if (!todos.length) return { items: [], active: -1 };
+    const items = todos.slice(0, 30).map(t => ({ act: 'todo', p, t, label: t.text }));
+    if (qq.length >= 2 && !p.todos.some(t => t.text.trim().toLowerCase() === qq)) items.push({ act: 'new-todo', p, label: `Add “${C.stripDuration(q)}” as a to-do`, quiet: true });
+    return { items, active: qq && todos[0].text.toLowerCase().startsWith(qq) ? 0 : -1, head: `To-dos of ${projectTitle(p)}` };
+  }
+  function sugHide() {
+    if (sugBox.hidden) return;
+    sugBox.hidden = true;
+    sug.key = null;
+    for (const el of document.querySelectorAll('#tasks input[aria-expanded="true"], #agenda input[aria-expanded="true"]')) { el.setAttribute('aria-expanded', 'false'); el.removeAttribute('aria-activedescendant'); }
+  }
+  function sugUpdate() {
+    const ctx = sugContext();
+    if (!ctx || sug.dismissed === `${ctx.key}|${ctx.text}` || !$('#picker').hidden) { sugHide(); return; }
+    const r = sugBuild(ctx);
+    if (!r.items.length) { sugHide(); return; }
+    const same = sug.key === ctx.key && !sugBox.hidden;
+    sug.items = r.items;
+    sug.head = r.head;
+    sug.active = same && sug.typed === ctx.text ? Math.min(sug.active, r.items.length - 1) : r.active;
+    sug.typed = ctx.text;
+    sug.key = ctx.key;
+    sugPaint();
+    sugBox.hidden = false;
+    for (const x of document.querySelectorAll('#tasks input[aria-expanded="true"], #agenda input[aria-expanded="true"]')) if (x !== ctx.el) x.setAttribute('aria-expanded', 'false');
+    ctx.el.setAttribute('aria-autocomplete', 'list');
+    ctx.el.setAttribute('aria-controls', 'suggestList');
+    ctx.el.setAttribute('aria-expanded', 'true');
+    sugPlace(ctx.el);
+  }
+  function sugPaint() {
+    $('#suggestHead').textContent = sug.head;
+    $('#suggestList').innerHTML = sug.items.map((x, k) =>
+      `<button type="button" role="option" tabindex="-1" id="sug-${k}" class="pick-item${x.quiet ? ' quiet' : ''}" data-k="${k}" aria-selected="${k === sug.active}">` +
+      `<span>${esc(x.label)}</span>${x.note ? `<span class="note">${esc(x.note)}</span>` : ''}</button>`).join('');
+    const el = document.activeElement;
+    if (el && el.matches(SUG_INPUTS)) {
+      if (sug.active >= 0) el.setAttribute('aria-activedescendant', `sug-${sug.active}`); else el.removeAttribute('aria-activedescendant');
+    }
+    const cur = $(`#sug-${sug.active}`);
+    if (cur) cur.scrollIntoView({ block: 'nearest' });
+  }
+  function sugPlace(input) {
+    const r = input.getBoundingClientRect();
+    const w = Math.min(380, window.innerWidth - 24);
+    sugBox.style.width = `${w}px`;
+    sugBox.style.left = `${Math.max(12, Math.min(r.left - 8, window.innerWidth - w - 12))}px`;
+    const h = sugBox.offsetHeight;
+    const below = r.bottom + 4;
+    sugBox.style.top = `${below + h > window.innerHeight - 12 && r.top - h - 4 > 12 ? r.top - h - 4 : below}px`;
+  }
+  function sugChoose(k) {
+    const x = sug.items[k];
+    const ctx = sugContext();
+    if (!x || !ctx) return;
+    if (ctx.meeting) {
+      // The title becomes the project's name, ready to go on: "10:00 Partena " then "kick-off".
+      const name = x.p.name.trim();
+      sugHide();
+      if (ctx.ghost) {
+        const head = ctx.text.slice(0, ctx.text.length - ctx.title.length);
+        ui.meetingText = `${head}${name} `;
+        ui.meetingRef = x.p.id;
+        ctx.el.value = ui.meetingText;
+        meetingHint();
+      } else {
+        ctx.m.title = `${name} `;
+        ctx.m.ref = { p: x.p.id };
+        changed();
+        renderAgenda();
+        ctx.el = $(`#agenda [data-mid="${CSS.escape(ctx.m.id)}"] [data-mtitle]`);
+      }
+      sug.dismissed = `${ctx.key}|${ctx.el.value}`;
+      ctx.el.focus();
+      ctx.el.setSelectionRange(ctx.el.value.length, ctx.el.value.length);
+      return;
+    }
+    const L = ensureDay(ui.date).lines;
+    const q = ctx.text.trim();
+    let line = ctx.ghost ? null : L.find(l => l.id === ctx.line.id);
+    if (ctx.ghost) {
+      line = { id: uid(), text: '', level: 0, done: false };
+      L.splice(C.firstDoneGroup(L), 0, line);
+    }
+    let i = L.indexOf(line);
+    sugHide();
+    if (x.act === 'project' || x.act === 'create') {
+      let p = x.p;
+      if (x.act === 'create') {
+        p = newProject();
+        p.name = q;
+        toast(`Created ${projectTitle(p)}. Its sheet is in Projects.`);
+      }
+      const hasKids = C.groupEnd(L, i) > i + 1;
+      const other = C.groups(L).find(([s]) => L[s] !== line && !L[s].done && L[s].ref && L[s].ref.p === p.id && !L[s].ref.t);
+      if (other && !hasKids) {
+        // Already in the plan: add the new action under that project instead of a second copy of it.
+        L.splice(i, 1);
+        const g = C.groups(L).find(([s]) => L[s].ref && L[s].ref.p === p.id && !L[s].done && !L[s].ref.t);
+        const child = { id: uid(), text: '', level: 1, done: false };
+        L.splice(g[1], 0, child);
+        if (x.act !== 'create') toast(`${projectTitle(p)} is already in the plan: write the next action under it`);
+        tasksOL.commit({ id: child.id, pos: 0 });
+        return;
+      }
+      line.text = p.name.trim() || `Project ${p.num}`;
+      line.ref = { p: p.id };
+      if (hasKids) { tasksOL.commit({ id: line.id, pos: null }); return; }
+      const child = { id: uid(), text: '', level: 1, done: false };
+      L.splice(i + 1, 0, child);
+      tasksOL.commit({ id: child.id, pos: 0 });
+      return;
+    }
+    const p = x.p;
+    let todo = x.t;
+    const mins = C.duration(q);
+    if (x.act === 'new-todo') {
+      todo = { id: uid(), text: C.stripDuration(q), level: 0, done: false };
+      p.todos.splice(C.firstDoneGroup(p.todos), 0, todo);
+    }
+    line.ref = { p: p.id, t: todo.id };
+    line.text = mins ? `${todo.text} - ${C.fmtDur(mins)}` : todo.text;
+    todo.planned = ui.date;
+    tasksOL.commit({ id: line.id, pos: null });
+  }
+  // Runs before the outline's own keys, so Return picks a highlighted suggestion and Esc closes the list first.
+  const sugKeys = e => {
+    if (sugBox.hidden || e.isComposing || !e.target.matches(SUG_INPUTS)) return;
+    const n = sug.items.length;
+    const stop = () => { e.preventDefault(); e.stopPropagation(); };
+    if (e.key === 'ArrowDown' && !e.altKey && !e.metaKey && !e.ctrlKey) { stop(); sug.active = Math.min(n - 1, sug.active + 1); sugPaint(); return; }
+    if (e.key === 'ArrowUp' && !e.altKey && !e.metaKey && !e.ctrlKey) {
+      if (sug.active < 0) { sugHide(); return; }
+      stop(); sug.active--; sugPaint(); return;
+    }
+    if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey && sug.active >= 0) { stop(); sugChoose(sug.active); return; }
+    if (e.key === 'Escape') { stop(); const c = sugContext(); if (c) sug.dismissed = `${c.key}|${c.text}`; sugHide(); return; }
+    if (e.key === 'Tab' || (e.metaKey || e.ctrlKey)) sugHide();
+  };
+  for (const box of [$('#tasks'), $('#agenda')]) {
+    box.addEventListener('keydown', sugKeys, true);
+    box.addEventListener('focusin', () => sugUpdate());
+    box.addEventListener('input', () => sugUpdate());
+    box.addEventListener('focusout', () => setTimeout(() => { if (!document.activeElement || !document.activeElement.matches(SUG_INPUTS)) sugHide(); }, 0));
+  }
+  sugBox.addEventListener('mousedown', e => e.preventDefault());
+  sugBox.addEventListener('click', e => { const b = e.target.closest('[data-k]'); if (b) sugChoose(Number(b.dataset.k)); });
+  sugBox.addEventListener('mousemove', e => {
+    const b = e.target.closest('[data-k]');
+    if (b && Number(b.dataset.k) !== sug.active) { sug.active = Number(b.dataset.k); sugPaint(); }
+  });
+  window.addEventListener('resize', () => { if (!sugBox.hidden) sugUpdate(); });
+  document.addEventListener('scroll', () => { const el = document.activeElement; if (!sugBox.hidden && el && el.matches(SUG_INPUTS)) sugPlace(el); }, true);
+
   /* ---------- linking a plan line to a project or to-do ---------- */
   const pick = { lineId: null, step: 'project', project: null };
   function openPicker(lineId) {
     if (readOnly) return;
+    sugHide();
     const L = viewDay(ui.date).lines;
     const i = L.findIndex(l => l.id === lineId);
     if (i < 0) return;
@@ -893,16 +1622,20 @@
     const sel = ui.selecting;
     const on = ui.sel.has(p.id);
     const meta = [who && esc(who), next && !p.archived && `Next: ${esc(next.text)}${nextDue ? `, ${esc(nextDue.text.replace(/^Due /, '').replace(/^today$/, 'today'))}` : ''}`].filter(Boolean);
-    return `<button type="button" class="prow${on ? ' picked' : ''}" data-act="${sel ? 'select-project' : 'open-project'}" data-pid="${esc(p.id)}"${sel ? ` role="checkbox" aria-checked="${on}"` : ''}>` +
+    const grip = !sel && !p.archived && !readOnly
+      ? `<button type="button" class="grip" data-grip aria-label="Move ${esc(projectTitle(p))}" title="Drag to reorder, or use the arrow keys"></button>`
+      : '<span class="grip-space"></span>';
+    return `<div class="srow" data-sort-id="${esc(p.id)}" data-sort-kind="project">${grip}` +
+      `<button type="button" class="prow${on ? ' picked' : ''}" data-act="${sel ? 'select-project' : 'open-project'}" data-pid="${esc(p.id)}"${sel ? ` role="checkbox" aria-checked="${on}"` : ''}>` +
       (sel ? `<span class="chk" aria-hidden="true"${on ? ' aria-pressed="true"' : ''}></span>` : '') +
       `<span class="pnum">${p.num}</span>` +
       `<span class="pmain"><span class="pname">${esc(p.name.trim() || 'Untitled project')}</span>` +
       meta.map(m => `<span class="pmeta">${m}</span>`).join('') + '</span>' +
-      `<span class="pside">${n ? `<span class="note">${n} to ${n === 1 ? 'do' : 'dos'}</span>` : ''}${p.archived ? '' : dueHtml(due)}</span></button>`;
+      `<span class="pside">${n ? `<span class="note">${n} to ${n === 1 ? 'do' : 'dos'}</span>` : ''}${p.archived ? '' : dueHtml(due)}</span></button></div>`;
   }
   function renderProjectList() {
-    const active = sorted(D.projects.filter(p => !p.archived));
-    const archived = sorted(D.projects.filter(p => p.archived));
+    const active = D.projects.filter(p => !p.archived);
+    const archived = D.projects.filter(p => p.archived);
     for (const id of [...ui.sel]) if (!proj(id)) ui.sel.delete(id);
     const n = ui.sel.size;
     $('#projHead').innerHTML = ui.selecting
@@ -914,24 +1647,29 @@
         `<button type="button" class="btn ghost danger" data-act="batch-delete"${n ? '' : ' disabled'}>Delete</button>` +
         '<button type="button" class="btn" data-act="select-done">Done</button>'
       : '<h1>Projects</h1>' +
-        (D.projects.length ? `<label class="sort">Sort by <select id="projSort">${['number', 'deadline', 'name'].map(k =>
-          `<option value="${k}"${D.settings.projectSort === k ? ' selected' : ''}>${k[0].toUpperCase() + k.slice(1)}</option>`).join('')}</select></label>` +
-          `<button type="button" class="btn ghost" data-act="select-start"${readOnly ? ' disabled' : ''}>Select</button>` : '') +
+        (D.projects.length ? `<button type="button" class="btn ghost" data-act="select-start"${readOnly ? ' disabled' : ''}>Select</button>` : '') +
         `<button type="button" class="btn ghost" data-act="md-open"${readOnly ? ' disabled' : ''} title="Import project notes saved as Markdown, for example from Notes">Import</button>` +
         `<button type="button" class="btn" data-act="project-new"${readOnly ? ' disabled' : ''}>New project</button>`;
     let h = active.length
-      ? `<div class="plist">${active.map(projectRow).join('')}</div>`
+      ? `<div class="plist" id="projOrder">${active.map(projectRow).join('')}</div>` +
+        (active.length > 1 && !ui.selecting && !readOnly ? '<p class="hint list-hint">Drag a project by the dots to change its place. Its number follows its place in the list.</p>' : '')
       : `<p class="empty">${archived.length ? 'All your projects are archived.' : 'Keep each project’s contacts, links, schedule, notes, to-dos and website copy in one place. Create one with New project, or bring your project notes over from Notes with Import.'}</p>`;
     if (archived.length) h += `<details class="archived"${ui.selecting || ui.showArchived ? ' open' : ''}><summary>Archived (${archived.length})</summary><div class="plist">${archived.map(projectRow).join('')}</div></details>`;
     $('#projItems').innerHTML = h;
   }
-  $('#projHead').addEventListener('change', e => {
-    if (e.target.id !== 'projSort') return;
-    D.settings.projectSort = e.target.value;
-    changed();
-    renderProjectList();
-  });
   $('#projItems').addEventListener('toggle', e => { if (e.target.matches('details.archived')) ui.showArchived = e.target.open; }, true);
+  sortable($('#projItems'), {
+    accept: (a, t) => t.dataset.sortKind === 'project' && !!t.closest('#projOrder'),
+    drop: (a, t, where) => { moveProject(a.dataset.sortId, t.dataset.sortId, where === 'after'); refocusGrip($('#projItems'), a.dataset.sortId); },
+    step: (el, dir) => {
+      const open = activeProjects();
+      const i = open.findIndex(p => p.id === el.dataset.sortId);
+      const to = open[i + dir];
+      if (!to) return;
+      moveProject(el.dataset.sortId, to.id, dir > 0);
+      refocusGrip($('#projItems'), el.dataset.sortId);
+    }
+  });
 
   function newProject(base) {
     const p = base || {
@@ -939,12 +1677,23 @@
       fields: {}, schedule: C.scheduleFrom(D.settings.defaultSchedule, uid), todos: [], copy: normalizeCopy(null)
     };
     if (!p.copy) p.copy = normalizeCopy(null);
-    D.projects.push(p);
+    const firstArchived = D.projects.findIndex(x => x.archived);
+    D.projects.splice(firstArchived < 0 ? D.projects.length : firstArchived, 0, p);
+    C.renumberProjects(D.projects);
     return p;
   }
   function deleteProjects(ids) {
     D.projects = D.projects.filter(p => !ids.includes(p.id));
+    C.renumberProjects(D.projects);
     for (const id of ids) ui.sel.delete(id);
+    for (const k of Object.keys(D.drafts)) if (ids.some(id => k.endsWith(`|${id}`))) delete D.drafts[k];
+  }
+  // Moves a project before or after another, or one place up or down; numbers follow.
+  function moveProject(id, toId, after) {
+    if (readOnly || !C.moveById(D.projects, id, toId, after)) return;
+    C.renumberProjects(D.projects);
+    changed();
+    renderProjectList();
   }
 
   /* ---------- project sheet ---------- */
@@ -964,8 +1713,6 @@
     const sched = (p.schedule || []).filter(x => x.text.trim());
     const doneN = sched.filter(x => x.done).length;
     $('#pSchedCount').textContent = sched.length ? `${doneN} of ${sched.length} done` : '';
-    const dup = D.projects.find(x => x !== p && x.num === p.num);
-    $('#pNumNote').textContent = dup ? `Also used by ${dup.name.trim() || 'another project'}` : '';
   }
   // A date that can be left empty: "No deadline" until one is chosen, with a way to remove it again.
   function dateField(key, value, emptyLabel, label) {
@@ -982,7 +1729,8 @@
     name.readOnly = !!readOnly;
     const num = $('#pNum');
     if (document.activeElement !== num) num.value = p.num;
-    num.readOnly = !!readOnly;
+    num.readOnly = !!readOnly || p.archived;
+    num.title = p.archived ? 'Archived projects keep their last number' : 'Place in the project list: type another number to move it there';
     $('#archBtn').textContent = p.archived ? 'Restore' : 'Archive';
     for (const b of document.querySelectorAll('#projSheet .crumbs .link')) b.disabled = !!readOnly && b.dataset.act !== 'project-mail';
     const tab = ui.sheetTab;
@@ -1043,11 +1791,7 @@
     if (!p || readOnly) return;
     const el = e.target;
     if (el.id === 'pName') { p.name = el.value; changed(); return; }
-    if (el.id === 'pNum') {
-      const n = parseInt(el.value, 10);
-      if (n > 0 && n < 1e7) { p.num = n; changed(); renderSheetSub(); }
-      return;
-    }
+    if (el.id === 'pNum') return;
     if (el.hasAttribute('data-phase-text')) {
       const x = p.schedule.find(y => y.id === el.closest('.phase').dataset.phase);
       if (x) { x.text = el.value; changed(); renderSheetSub(); }
@@ -1062,6 +1806,18 @@
     const open = el.parentElement.querySelector('.open');
     if (open) open.hidden = !C.linkOf(el.value);
   });
+  // The number on a sheet is its place in the list: type another one to move the project there.
+  $('#pNum').addEventListener('change', e => {
+    const p = proj(ui.project);
+    if (!p || readOnly) return;
+    const n = parseInt(e.target.value, 10);
+    if (p.archived || !(n > 0)) { e.target.value = p.num; return; }
+    C.moveProjectTo(D.projects, p.id, n);
+    e.target.value = p.num;
+    changed();
+    toast(`Now #${p.num} in the list`);
+  });
+  $('#pNum').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } });
   $('#pFields').addEventListener('change', e => {
     const p = proj(ui.project);
     if (!p || readOnly || !e.target.hasAttribute('data-plang')) return;
@@ -1176,9 +1932,8 @@
     for (const x of mdImport.parsed) {
       const m = mode === 'update' ? matchFor(x) : null;
       if (m) { mergeProject(m, x); updated++; touched.push(m); continue; }
-      const used = D.projects.some(p => p.num === x.num);
       const p = newProject({
-        id: uid(), num: x.num && !used ? x.num : C.nextNumber(D.projects), name: x.name, archived: false,
+        id: uid(), num: 0, name: x.name, archived: false,
         lang: (C.parseLanguages(x.fields.languages || '').find(l => C.LANGS.includes(l))) || D.settings.me.lang,
         fields: x.fields, schedule: x.schedule || C.scheduleFrom(D.settings.defaultSchedule, uid),
         todos: C.normalize(x.todos, 1), copy: normalizeCopy(null)
@@ -1336,11 +2091,31 @@
 
   /* ---------- mail ---------- */
   const tplById = id => D.templates.find(t => t.id === id) || null;
+  const catById = id => D.templateCats.find(c => c.id === id) || null;
   const sameStarter = x => D.templates.find(t => t.name.trim().toLowerCase() === x.name.toLowerCase());
-  // Example templates you don't have yet, or have without some of their languages.
-  const missingStarters = () => C.STARTER_TEMPLATES.filter(x => { const t = sameStarter(x); return !t || C.LANGS.some(l => !tplLangs(t).includes(l)); });
   const tplLangs = t => C.LANGS.filter(l => t[l] && (t[l].subject.trim() || t[l].body.trim()));
   const LANG = C.LANG_NAMES;
+  // What the list shows under a name: the first subject written, or else the first line of the email.
+  function tplSummary(t) {
+    const langs = tplLangs(t);
+    const withSubject = langs.find(l => t[l].subject.trim());
+    if (withSubject) return C.plainMail(t[withSubject].subject).trim();
+    const line = langs.length ? C.firstLine(C.plainMail(t[langs[0]].body)) : '';
+    return line ? `No subject yet: “${line.length > 60 ? `${line.slice(0, 60)}…` : line}”` : 'Nothing written yet';
+  }
+
+  /* drafts: what you fill in or change in an email, kept per template and project until you clear it */
+  const draftKey = () => `${ui.mail.tpl}|${ui.mail.project || '-'}`;
+  const EMPTY_DRAFT = { to: '', toTouched: false, fields: {}, text: {} };
+  const draft = () => D.drafts[draftKey()] || EMPTY_DRAFT;
+  function draftForWrite() {
+    const k = draftKey();
+    if (!D.drafts[k]) D.drafts[k] = { at: Date.now(), to: '', toTouched: false, fields: {}, text: {} };
+    D.drafts[k].at = Date.now();
+    return D.drafts[k];
+  }
+  const draftUsed = d => d && (d.toTouched || Object.keys(d.fields).length || Object.keys(d.text).length);
+  function tidyDrafts() { for (const [k, d] of Object.entries(D.drafts)) if (!draftUsed(d)) delete D.drafts[k]; }
 
   function renderMail() {
     const t = tplById(ui.mail.tpl);
@@ -1349,25 +2124,222 @@
     $('#mailCompose').hidden = !t;
     if (t) renderCompose(t); else renderTemplateList();
   }
+
+  // Templates grouped by category, in the order you set by dragging. Uncategorised ones come first.
+  function tplGroups() {
+    const groups = [{ id: '', name: 'Uncategorised', fixed: true }].concat(D.templateCats);
+    return groups.map(g => ({ ...g, cat: g.fixed ? null : g, items: D.templates.filter(t => (t.cat || '') === g.id) }));
+  }
+  function templateRow(t) {
+    const langs = tplLangs(t);
+    const grip = readOnly ? '<span class="grip-space"></span>' : `<button type="button" class="grip" data-grip aria-label="Move ${esc(t.name.trim() || 'this template')}" title="Drag to reorder or to another category, or use the arrow keys"></button>`;
+    return `<div class="srow" data-sort-id="${esc(t.id)}" data-sort-kind="tpl">${grip}` +
+      `<button type="button" class="prow" data-act="tpl-open" data-tid="${esc(t.id)}">` +
+      `<span class="pmain"><span class="pname">${esc(t.name.trim() || 'Untitled template')}</span>` +
+      `<span class="pmeta">${esc(tplSummary(t))}</span></span>` +
+      `<span class="pside">${C.LANGS.map(l => `<span class="lang${langs.includes(l) ? '' : ' off'}" title="${langs.includes(l) ? '' : 'Not written in '}${LANG[l]}">${l.toUpperCase()}</span>`).join('')}</span></button></div>`;
+  }
   function renderTemplateList() {
     $('[data-act="tpl-new"]').disabled = !!readOnly;
-    const list = D.templates.slice().sort((a, b) => a.name.localeCompare(b.name));
-    if (!list.length) {
+    $('[data-act="cat-new"]').disabled = !!readOnly;
+    $('[data-act="cat-new"]').hidden = !D.templates.length && !D.templateCats.length;
+    if (!D.templates.length && !D.templateCats.length) {
       $('#tplItems').innerHTML = '<div class="empty"><p>Save the emails you send again and again, in English, Spanish, French or Italian. Write the parts that change in {{double braces}}: project details such as {{first_name}} or {{deadline}} fill in from the project, and anything else becomes a blank to fill in.</p>' +
-        `<div class="actions"><button type="button" class="btn" data-act="tpl-seed"${readOnly ? ' disabled' : ''}>Add example templates</button>` +
-        `<button type="button" class="btn ghost" data-act="import-v01"${readOnly ? ' disabled' : ''}>Import from version 0.1…</button></div></div>`;
+        `<div class="actions"><button type="button" class="btn" data-act="tpl-new"${readOnly ? ' disabled' : ''}>Browse suggestions</button></div></div>`;
       return;
     }
-    $('#tplItems').innerHTML = `<div class="plist">${list.map(t => `<button type="button" class="prow" data-act="tpl-open" data-tid="${esc(t.id)}">` +
-      `<span class="pmain"><span class="pname">${esc(t.name.trim() || 'Untitled template')}</span>` +
-      `<span class="pmeta">${esc(C.fill(t[tplLangs(t)[0] || 'en'].subject, {}).trim() || 'No subject yet')}</span></span>` +
-      `<span class="pside">${C.LANGS.map(l => `<span class="lang${tplLangs(t).includes(l) ? '' : ' off'}" title="${tplLangs(t).includes(l) ? '' : 'Not written in '}${LANG[l]}">${l.toUpperCase()}</span>`).join('')}</span></button>`).join('')}</div>` +
-      (missingStarters().length && !readOnly ? `<p class="more"><button type="button" class="link" data-act="tpl-seed">${missingStarters().every(x => !sameStarter(x)) ? 'Add the example templates' : 'Complete the example templates, in English, Spanish, French and Italian'}</button></p>` : '');
+    const ro = readOnly ? ' disabled' : '';
+    const groups = tplGroups();
+    const flat = !D.templateCats.length;
+    let h = '<div class="plist tpl-list">';
+    for (const g of groups) {
+      if (flat) { h += g.items.map(templateRow).join(''); continue; }
+      if (g.fixed && !g.items.length) {
+        h += `<div class="srow cat-zone fixed" data-sort-id="" data-sort-kind="cat"><span class="grip-space"></span><span class="cat-name quiet">Uncategorised</span><span class="note">Drag a template here to take it out of its category</span></div>`;
+        continue;
+      }
+      const c = g.cat;
+      const open = g.fixed || !c.collapsed;
+      const name = !g.fixed && ui.renameCat === c.id
+        ? `<input class="cat-rename" data-cat-rename value="${esc(c.name)}" aria-label="Category name" ${INPUT_ATTRS}>`
+        : `<button type="button" class="cat-toggle" data-act="cat-toggle"${g.fixed ? ' disabled' : ''} aria-expanded="${open}">${g.fixed ? '' : '<span class="caret" aria-hidden="true"></span>'}<span class="cat-name">${esc(g.fixed ? 'Uncategorised' : (c.name.trim() || 'Untitled category'))}</span></button>`;
+      const grip = g.fixed || readOnly ? '<span class="grip-space"></span>' : `<button type="button" class="grip" data-grip aria-label="Move the ${esc(c.name.trim() || 'untitled')} category" title="Drag to reorder categories"></button>`;
+      h += `<div class="srow cat-head${g.fixed ? ' fixed' : ''}" data-sort-id="${esc(g.id)}" data-sort-kind="cat">${grip}${name}` +
+        `<span class="note">${g.items.length || ''}</span>` +
+        (g.fixed ? '' : `<span class="cat-actions"><button type="button" class="link" data-act="cat-rename"${ro}>Rename</button><button type="button" class="link danger" data-act="cat-delete"${ro}>Delete</button></span>`) + '</div>';
+      if (!open) continue;
+      h += g.items.length ? g.items.map(templateRow).join('')
+        : `<div class="srow cat-zone" data-sort-id="${esc(g.id)}" data-sort-kind="zone"><span class="grip-space"></span><span class="note">Drag templates here</span></div>`;
+    }
+    h += '</div>';
+    if (!readOnly && D.templates.length > 1) h += `<p class="hint list-hint">Drag a template by the dots to reorder it${flat ? '' : ' or move it to another category'}. ${flat ? 'With New category, you can group them.' : ''}</p>`;
+    $('#tplItems').innerHTML = h;
+    const input = $('#tplItems [data-cat-rename]');
+    if (input) { input.focus(); input.select(); }
+  }
+  function moveTemplateTo(id, target, after) {
+    if (readOnly || !C.moveTemplate(D.templates, id, target, after)) return;
+    changed();
+    renderTemplateList();
+    refocusGrip($('#tplItems'), id);
+  }
+  // Arrow keys on a template's grip: one place up or down, crossing into the next category at the ends.
+  function stepTemplate(id, dir) {
+    const groups = tplGroups().filter(g => g.fixed || !g.cat.collapsed);
+    const gi = groups.findIndex(g => g.items.some(t => t.id === id));
+    if (gi < 0) return;
+    const items = groups[gi].items, i = items.findIndex(t => t.id === id), next = items[i + dir];
+    if (next) { moveTemplateTo(id, { tpl: next.id }, dir > 0); return; }
+    const other = groups[gi + dir];
+    if (!other || !D.templateCats.length) return;
+    if (dir < 0 && other.items.length) moveTemplateTo(id, { tpl: other.items[other.items.length - 1].id }, true);
+    else moveTemplateTo(id, { cat: other.id }, false);
+  }
+  sortable($('#tplItems'), {
+    accept: (a, t) => (a.dataset.sortKind === 'cat' ? t.dataset.sortKind === 'cat' && t.dataset.sortId !== '' : true),
+    into: (a, t) => a.dataset.sortKind === 'tpl' && t.dataset.sortKind !== 'tpl',
+    drop: (a, t, where) => {
+      if (a.dataset.sortKind === 'cat') {
+        if (C.moveById(D.templateCats, a.dataset.sortId, t.dataset.sortId, where === 'after')) { changed(); renderTemplateList(); refocusGrip($('#tplItems'), a.dataset.sortId); }
+        return;
+      }
+      if (t.dataset.sortKind === 'tpl') moveTemplateTo(a.dataset.sortId, { tpl: t.dataset.sortId }, where === 'after');
+      else {
+        const c = catById(t.dataset.sortId);
+        moveTemplateTo(a.dataset.sortId, { cat: t.dataset.sortId }, false);
+        if (c && c.collapsed) toast(`Moved to ${c.name.trim() || 'the category'}`);
+      }
+    },
+    step: (el, dir) => {
+      if (el.dataset.sortKind === 'tpl') { stepTemplate(el.dataset.sortId, dir); return; }
+      const i = D.templateCats.findIndex(c => c.id === el.dataset.sortId), to = D.templateCats[i + dir];
+      if (to && C.moveById(D.templateCats, el.dataset.sortId, to.id, dir > 0)) { changed(); renderTemplateList(); refocusGrip($('#tplItems'), el.dataset.sortId); }
+    }
+  });
+  $('#tplItems').addEventListener('input', e => {
+    if (!e.target.hasAttribute('data-cat-rename') || readOnly) return;
+    const c = catById(ui.renameCat);
+    if (c) { c.name = e.target.value; changed(); }
+  });
+  $('#tplItems').addEventListener('keydown', e => {
+    if (!e.target.hasAttribute('data-cat-rename')) return;
+    if (e.key === 'Enter' || e.key === 'Escape') { e.preventDefault(); e.target.blur(); }
+  });
+  $('#tplItems').addEventListener('focusout', e => {
+    if (!e.target.hasAttribute('data-cat-rename')) return;
+    const c = catById(ui.renameCat);
+    if (c && !c.name.trim()) { c.name = 'Untitled category'; changed(); }
+    ui.renameCat = null;
+    setTimeout(renderTemplateList, 0);
+  });
+
+  /* the suggestion picker behind New template */
+  const pickTpl = { key: 'blank', lang: 'en' };
+  function openTemplatePicker() {
+    if (readOnly) return;
+    pickTpl.key = 'blank';
+    pickTpl.lang = D.settings.me.lang;
+    renderTemplatePicker();
+    $('#tplPick').showModal();
+    const first = $('#tpList [aria-selected="true"]');
+    if (first) first.focus();
+  }
+  function starterState(x) {
+    const t = sameStarter(x);
+    if (!t) return 'new';
+    return C.LANGS.every(l => tplLangs(t).includes(l)) ? 'have' : 'partial';
+  }
+  function renderTemplatePicker() {
+    const item = (key, name, about, badge) => `<button type="button" role="option" class="tp-item" data-tp="${esc(key)}" aria-selected="${pickTpl.key === key}">` +
+      `<span class="tp-name">${esc(name)}${badge ? `<span class="tp-badge">${esc(badge)}</span>` : ''}</span><span class="tp-about">${esc(about)}</span></button>`;
+    let h = item('blank', 'Blank template', 'Start from an empty page and write it yourself.', '');
+    for (const cat of C.TEMPLATE_CATEGORIES) {
+      const list = C.STARTER_TEMPLATES.filter(x => x.cat === cat);
+      h += `<p class="tp-cat">${esc(cat)}</p>` + list.map(x => {
+        const st = starterState(x);
+        return item(x.name, x.name, x.about, st === 'have' ? 'Added' : st === 'partial' ? 'Some languages missing' : '');
+      }).join('');
+    }
+    $('#tpList').innerHTML = h;
+    const x = C.STARTER_TEMPLATES.find(y => y.name === pickTpl.key);
+    const go = $('#tpUse');
+    if (!x) {
+      $('#tpPreview').innerHTML = '<p class="hint">A blank template in Uncategorised. Write it in one language or several, with the parts that change in {{double braces}}.</p>';
+      go.textContent = 'Create a blank template';
+      return;
+    }
+    const lang = pickTpl.lang;
+    const st = starterState(x);
+    $('#tpPreview').innerHTML = `<div class="seg" role="group" aria-label="Language">${C.LANGS.map(l => `<button type="button" data-tp-lang="${l}" aria-pressed="${l === lang}">${l.toUpperCase()}</button>`).join('')}</div>` +
+      `<p class="psubj">${richHtml(x[lang].subject, {}, true)}</p><div class="pbody">${richHtml(x[lang].body, {})}</div>`;
+    go.textContent = st === 'have' ? 'Open my copy' : st === 'partial' ? 'Add the missing languages' : `Add to ${x.cat}`;
+  }
+  $('#tpList').addEventListener('click', e => {
+    const b = e.target.closest('[data-tp]');
+    if (!b) return;
+    pickTpl.key = b.dataset.tp;
+    renderTemplatePicker();
+    $(`#tpList [data-tp="${CSS.escape(pickTpl.key)}"]`).focus();
+  });
+  $('#tpList').addEventListener('dblclick', e => { if (e.target.closest('[data-tp]')) useTemplatePick(); });
+  $('#tpList').addEventListener('keydown', e => {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Enter') return;
+    e.preventDefault();
+    if (e.key === 'Enter') { useTemplatePick(); return; }
+    const items = [...$('#tpList').querySelectorAll('[data-tp]')];
+    const i = items.findIndex(b => b.dataset.tp === pickTpl.key);
+    const next = items[Math.max(0, Math.min(items.length - 1, i + (e.key === 'ArrowDown' ? 1 : -1)))];
+    pickTpl.key = next.dataset.tp;
+    renderTemplatePicker();
+    $(`#tpList [data-tp="${CSS.escape(pickTpl.key)}"]`).focus();
+  });
+  $('#tpPreview').addEventListener('click', e => {
+    const b = e.target.closest('[data-tp-lang]');
+    if (b) { pickTpl.lang = b.dataset.tpLang; renderTemplatePicker(); }
+  });
+  function categoryNamed(name) {
+    let c = D.templateCats.find(x => x.name.trim().toLowerCase() === name.toLowerCase());
+    if (!c) { c = { id: uid(), name }; D.templateCats.push(c); }
+    return c;
+  }
+  function useTemplatePick() {
+    if (readOnly) return;
+    const x = C.STARTER_TEMPLATES.find(y => y.name === pickTpl.key);
+    $('#tplPick').close();
+    if (!x) {
+      const t = { id: uid(), name: '', cat: '', ...Object.fromEntries(C.LANGS.map(l => [l, { subject: '', body: '' }])) };
+      D.templates.unshift(t);
+      changed();
+      openTemplate(t.id);
+      ui.mail.editing = true;
+      ui.mail.lang = D.settings.me.lang;
+      renderMail();
+      $('[data-tpl="name"]').focus();
+      return;
+    }
+    let t = sameStarter(x);
+    if (t) {
+      const missing = C.LANGS.filter(l => !tplLangs(t).includes(l));
+      for (const l of missing) t[l] = { ...x[l] };
+      if (missing.length) { changed(); toast(`Added ${missing.map(l => LANG[l]).join(', ')}`); }
+    } else {
+      const c = categoryNamed(x.cat);
+      t = { id: uid(), name: x.name, cat: c.id, ...Object.fromEntries(C.LANGS.map(l => [l, { ...x[l] }])) };
+      const first = D.templates.findIndex(y => y.cat === c.id);
+      D.templates.splice(first < 0 ? D.templates.length : first, 0, t);
+      c.collapsed = false;
+      changed();
+      toast(`Added to ${c.name}`);
+    }
+    ui.mail.lang = pickTpl.lang;
+    openTemplate(t.id);
+    ui.mail.lang = pickTpl.lang;
+    renderMail();
   }
 
   function openTemplate(id, projectId) {
     const m = ui.mail;
-    m.tpl = id; m.fields = {}; m.editing = false; m.toTouched = false; m.to = ''; m.lang = null;
+    m.tpl = id; m.editing = false; m.lang = null;
     if (projectId !== undefined) m.project = projectId;
     if (m.project && !proj(m.project)) m.project = '';
     renderMail();
@@ -1381,13 +2353,27 @@
     return m.lang;
   }
   function mailValues(t) {
-    const m = ui.mail, lang = mailLang(t);
-    const v = C.autoValues(proj(m.project), D.settings.me, lang, today());
-    for (const [k, x] of Object.entries(m.fields)) if (x && x.trim()) v[k] = x;
+    const lang = mailLang(t);
+    const v = C.autoValues(proj(ui.mail.project), D.settings.me, lang, today());
+    for (const [k, x] of Object.entries(draft().fields)) if (x && x.trim()) v[k] = x;
     return v;
   }
   const langSeg = (lang, langs, editing) => `<div class="seg" role="group" aria-label="Language">${C.LANGS.map(l =>
     `<button type="button" data-act="mail-lang" data-lang="${l}" aria-pressed="${lang === l}"${!editing && !langs.includes(l) ? ` disabled title="Not written in ${LANG[l]} yet"` : ''}>${LANG[l]}</button>`).join('')}</div>`;
+
+  // Text with placeholders and [links], as HTML: links underlined, blanks still to fill marked.
+  function richHtml(s, values, plain) {
+    const filled = parts => parts.map(x => (x.blank ? `<mark class="blank">${esc(C.humanize(x.blank))}</mark>` : esc(x.text))).join('');
+    if (plain) return filled(C.fillParts(C.plainMail(s), values)) || '<span class="note">No subject</span>';
+    return C.linkParts(s).map(x => {
+      if (!x.link) return filled(C.fillParts(x.text, values));
+      const url = C.fill(x.url, values);
+      const ok = C.linkHref(url);
+      const tip = ok ? ok.replace(/^mailto:/i, '') : C.placeholders(x.url).length ? `Fill in ${C.placeholders(x.url).map(C.humanize).join(', ')}` : 'Not a web or email address';
+      return `<a class="mlink${ok ? '' : ' broken'}" title="${esc(tip)}">${filled(C.fillParts(x.label, values))}</a>`;
+    }).join('');
+  }
+  const hasLinks = s => C.linkParts(s).some(x => x.link) || /https?:\/\//i.test(s);
 
   function renderCompose(t) {
     const m = ui.mail;
@@ -1404,46 +2390,71 @@
     const lang = mailLang(t);
     const c = t[lang];
     const p = proj(m.project);
+    const d = draft();
+    const own = d.text[lang];
     const auto = C.autoValues(p, D.settings.me, lang, today());
     const names = C.placeholders(c.subject + '\n' + c.body);
     const blanks = names.filter(n => !auto[n]);
     const filled = names.filter(n => auto[n]);
-    if (!m.toTouched) m.to = auto.spoc_email || '';
+    const to = d.toTouched ? d.to : auto.spoc_email || '';
     const projOptions = activeProjects().concat(p && p.archived ? [p] : [])
-      .map(x => `<option value="${esc(x.id)}"${x.id === m.project ? ' selected' : ''}>${esc(x.name.trim() || 'Untitled project')}</option>`).join('');
-    box.innerHTML =
+      .map(x => `<option value="${esc(x.id)}"${x.id === m.project ? ' selected' : ''}>${esc(projectTitle(x))}</option>`).join('');
+    let h =
       `<h1 class="ctitle">${esc(t.name.trim() || 'Untitled template')}</h1>` +
       '<div class="cgrid">' +
       `<label class="ef">Project<select data-mail="project"><option value="">No project</option>${projOptions}</select></label>` +
       `<div class="ef"><span>Language</span>${langSeg(lang, langs, false)}</div>` +
-      `<label class="ef wide">To<input data-mail="to" type="email" value="${esc(m.to)}" placeholder="name@company.com" ${INPUT_ATTRS}></label>` +
-      '</div>' +
-      (blanks.length ? `<div class="blanks"><h2>Fill in</h2>${blanks.map(n => {
-        const v = esc(m.fields[n] || '');
+      `<label class="ef wide">To<input data-mail="to" type="email" value="${esc(to)}" placeholder="name@company.com" ${INPUT_ATTRS}${readOnly ? ' readonly' : ''}></label>` +
+      '</div>';
+    if (own) {
+      h += '<div class="own"><p class="hint">You’re changing this email directly, so the template and its blanks no longer apply to it. Your changes are kept until you clear them.</p>' +
+        `<label class="ef wide">Subject<input data-mtext="subject" value="${esc(own.subject)}" lang="${lang}" ${PROSE_ATTRS}${readOnly ? ' readonly' : ''}></label>` +
+        `<label class="ef wide">Email<textarea data-mtext="body" rows="10" lang="${lang}" ${PROSE_ATTRS}${readOnly ? ' readonly' : ''}>${esc(own.body)}</textarea></label>` +
+        `<div class="chips"><button type="button" class="chip" data-act="link-open"${readOnly ? ' disabled' : ''} title="Add a link (${MOD}K)">Link…</button>` +
+        '<span class="hint">Select some text first to turn it into a link.</span></div></div>';
+    } else {
+      if (blanks.length) h += `<div class="blanks"><h2>Fill in</h2>${blanks.map(n => {
+        const v = esc(d.fields[n] || '');
         const ctl = C.isLongBlank(n)
-          ? `<textarea data-mfield="${esc(n)}" rows="3" lang="${lang}" ${PROSE_ATTRS}>${v}</textarea>`
-          : `<input data-mfield="${esc(n)}" value="${v}" lang="${lang}" ${PROSE_ATTRS}>`;
+          ? `<textarea data-mfield="${esc(n)}" rows="3" lang="${lang}" ${PROSE_ATTRS}${readOnly ? ' readonly' : ''}>${v}</textarea>`
+          : `<input data-mfield="${esc(n)}" value="${v}" lang="${lang}" ${PROSE_ATTRS}${readOnly ? ' readonly' : ''}>`;
         return `<label class="ef${C.isLongBlank(n) ? ' wide' : ''}">${esc(C.humanize(n))}${ctl}</label>`;
-      }).join('')}</div>` : '') +
-      (filled.length ? `<p class="hint">Filled in from ${p ? esc(p.name.trim() || 'the project') : 'your details'}: ${filled.map(n => esc(/^[A-Z]{2,}/.test(C.humanize(n)) ? C.humanize(n) : C.humanize(n).toLowerCase())).join(', ')}.</p>` : '') +
-      '<div class="preview" aria-live="polite"><p class="psubj" id="pvSubject"></p><div class="pbody" id="pvBody"></div></div>' +
-      '<div class="actions"><button type="button" class="btn" data-act="mail-copy" data-what="body">Copy email</button>' +
+      }).join('')}</div>`;
+      if (filled.length) h += `<p class="hint">Filled in from ${p ? esc(p.name.trim() || 'the project') : 'your details'}: ${filled.map(n => esc(/^[A-Z]{2,}/.test(C.humanize(n)) ? C.humanize(n) : C.humanize(n).toLowerCase())).join(', ')}.</p>`;
+      h += '<div class="preview" aria-live="polite"><p class="psubj" id="pvSubject"></p><div class="pbody" id="pvBody"></div></div>';
+    }
+    const raw = own ? own.body : c.body;
+    h += '<div class="actions"><button type="button" class="btn" data-act="mail-copy" data-what="body">Copy email</button>' +
       '<button type="button" class="btn ghost" data-act="mail-copy" data-what="subject">Copy subject</button>' +
       '<button type="button" class="btn ghost" data-act="mail-open">Open in mail app</button>' +
       `<button type="button" class="btn ghost" data-act="mail-review" title="Opens ${esc(assistantName())} with a request to check the language">Review with ${esc(assistantName())}</button>` +
-      '<span class="missing" id="mailMissing"></span></div>';
+      '<span class="missing" id="mailMissing"></span></div>' +
+      '<div class="draft-bar">' +
+      (own ? `<button type="button" class="link" data-act="mail-unedit"${readOnly ? ' disabled' : ''}>Back to the template’s text</button>`
+        : `<button type="button" class="link" data-act="mail-edittext"${readOnly ? ' disabled' : ''}>Change the text of this email</button>`) +
+      `<span class="note" id="draftNote"></span>` +
+      `<button type="button" class="link" data-act="mail-clear" id="draftClear"${readOnly ? ' disabled' : ''}>Clear</button></div>` +
+      (hasLinks(raw) ? '<p class="hint">Copy email keeps the links clickable when you paste. Open in mail app writes them as text with the address in brackets.</p>' : '');
+    box.innerHTML = h;
     for (const ta of box.querySelectorAll('textarea')) grow(ta);
     renderPreview(t);
   }
-  function partsHtml(parts) {
-    return parts.map(x => (x.blank ? `<mark class="blank">${esc(C.humanize(x.blank))}</mark>` : esc(x.text))).join('');
+  function renderDraftNote() {
+    const used = draftUsed(D.drafts[draftKey()]);
+    const p = proj(ui.mail.project);
+    $('#draftNote').textContent = used ? `Kept for ${p ? p.name.trim() || 'this project' : 'when there’s no project'}` : '';
+    $('#draftClear').hidden = !used;
   }
   function renderPreview(t) {
-    const c = t[mailLang(t)], v = mailValues(t);
-    $('#pvSubject').innerHTML = partsHtml(C.fillParts(c.subject, v)) || '<span class="note">No subject</span>';
-    $('#pvBody').innerHTML = partsHtml(C.fillParts(c.body, v));
-    const n = C.placeholders(c.subject + '\n' + c.body).filter(x => !v[x]).length;
-    $('#mailMissing').textContent = n ? `${n} ${n === 1 ? 'blank' : 'blanks'} left` : '';
+    const own = draft().text[mailLang(t)];
+    const e = currentEmail();
+    if (!own) {
+      const c = t[mailLang(t)], v = mailValues(t);
+      $('#pvSubject').innerHTML = richHtml(c.subject, v, true);
+      $('#pvBody').innerHTML = richHtml(c.body, v);
+    }
+    $('#mailMissing').textContent = e.blanks ? `${e.blanks} ${e.blanks === 1 ? 'blank' : 'blanks'} left` : '';
+    renderDraftNote();
   }
 
   let lastTplField = null;
@@ -1453,13 +2464,16 @@
     const ro = readOnly ? ' readonly' : '';
     const chips = ['first_name', 'contact', 'project', 'deadline', 'db', 'website', 'task_link', 'version', 'ba', 'date', 'my_name', 'signature'];
     $('#composeBody').innerHTML =
-      `<label class="ef wide">Template name<input data-tpl="name" value="${esc(t.name)}" placeholder="For example Weekly status" ${INPUT_ATTRS}${ro}></label>` +
+      '<div class="cgrid">' +
+      `<label class="ef">Template name<input data-tpl="name" value="${esc(t.name)}" placeholder="For example Weekly status" ${INPUT_ATTRS}${ro}></label>` +
+      `<label class="ef">Category<select data-tpl-cat${readOnly ? ' disabled' : ''}><option value="">Uncategorised</option>${D.templateCats.map(x =>
+        `<option value="${esc(x.id)}"${x.id === t.cat ? ' selected' : ''}>${esc(x.name.trim() || 'Untitled category')}</option>`).join('')}</select></label></div>` +
       `<div class="ef"><span>Language</span>${langSeg(lang, tplLangs(t), true)}</div>` +
       `<label class="ef wide">Subject<input data-tpl="subject" value="${esc(c.subject)}" lang="${lang}" ${PROSE_ATTRS}${ro}></label>` +
       `<label class="ef wide">Email<textarea data-tpl="body" rows="10" lang="${lang}" ${PROSE_ATTRS}${ro}>${esc(c.body)}</textarea></label>` +
-      `<div class="chips" aria-label="Insert a project detail"><span class="hint">Insert:</span>${chips.map(n =>
+      `<div class="chips" aria-label="Insert a project detail"><button type="button" class="chip link-chip" data-act="link-open"${readOnly ? ' disabled' : ''} title="Add a link (${MOD}K)">Link…</button><span class="hint">Insert:</span>${chips.map(n =>
         `<button type="button" class="chip" data-act="tpl-insert" data-name="${n}"${readOnly ? ' disabled' : ''}>${esc(C.humanize(n))}</button>`).join('')}</div>` +
-      '<p class="hint">Project details fill in by themselves. Anything else you write in {{double braces}}, like {{next_steps}}, becomes a blank to fill in when you use the template.</p>' +
+      '<p class="hint">Project details fill in by themselves. Anything else you write in {{double braces}}, like {{next_steps}}, becomes a blank to fill in when you use the template. A link is written [text](address); select some text and choose Link to add one. The address can be a detail too, like {{task_link}}.</p>' +
       `<div class="actions"><button type="button" class="btn" data-act="tpl-edit">Done editing</button>` +
       `<button type="button" class="btn ghost" data-act="tpl-review"${(c.subject + c.body).trim() ? '' : ' disabled'}>Review with ${esc(assistantName())}</button><span class="grow"></span><button type="button" class="link danger" data-act="tpl-delete"${readOnly ? ' disabled' : ''}>Delete template</button></div>`;
     lastTplField = null;
@@ -1467,29 +2481,56 @@
     if (body) grow(body);
   }
 
-  $('#view-mail').addEventListener('focusin', e => { if (e.target.matches('[data-tpl="subject"], [data-tpl="body"]')) lastTplField = e.target; });
+  $('#view-mail').addEventListener('focusin', e => { if (e.target.matches('[data-tpl="subject"], [data-tpl="body"], [data-mtext]')) lastTplField = e.target; });
   $('#view-mail').addEventListener('input', e => {
     const t = tplById(ui.mail.tpl);
-    if (!t) return;
-    const el = e.target, m = ui.mail;
+    if (!t || readOnly) return;
+    const el = e.target;
     if (el.dataset.tpl) {
-      if (readOnly) return;
       if (el.dataset.tpl === 'name') t.name = el.value;
       else t[mailLang(t)][el.dataset.tpl] = el.value;
       if (el.tagName === 'TEXTAREA') grow(el);
       changed();
       return;
     }
-    if (el.dataset.mfield) { m.fields[el.dataset.mfield] = el.value; if (el.tagName === 'TEXTAREA') grow(el); renderPreview(t); return; }
-    if (el.dataset.mail === 'to') { m.to = el.value; m.toTouched = true; }
+    if (el.dataset.mfield) {
+      const d = draftForWrite();
+      if (el.value) d.fields[el.dataset.mfield] = el.value; else delete d.fields[el.dataset.mfield];
+      if (el.tagName === 'TEXTAREA') grow(el);
+      changed();
+      renderPreview(t);
+      return;
+    }
+    if (el.dataset.mtext) {
+      const d = draftForWrite();
+      const own = d.text[mailLang(t)] || (d.text[mailLang(t)] = { subject: '', body: '' });
+      own[el.dataset.mtext] = el.value;
+      if (el.tagName === 'TEXTAREA') grow(el);
+      changed();
+      renderPreview(t);
+      return;
+    }
+    if (el.dataset.mail === 'to') { const d = draftForWrite(); d.to = el.value; d.toTouched = true; changed(); renderDraftNote(); }
   });
   $('#view-mail').addEventListener('change', e => {
+    const t = tplById(ui.mail.tpl);
+    if (e.target.hasAttribute('data-tpl-cat')) {
+      if (!t || readOnly) return;
+      t.cat = catById(e.target.value) ? e.target.value : '';
+      changed();
+      return;
+    }
     if (e.target.dataset.mail !== 'project') return;
-    const m = ui.mail;
-    m.project = e.target.value;
-    m.lang = null;
-    m.toTouched = false;
+    tidyDrafts();
+    ui.mail.project = e.target.value;
+    ui.mail.lang = null;
     renderMail();
+  });
+  $('#view-mail').addEventListener('keydown', e => {
+    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'k' && e.target.matches('[data-tpl="body"], [data-mtext="body"]')) {
+      e.preventDefault();
+      openLinkDialog(e.target);
+    }
   });
 
   function insertPlaceholder(name) {
@@ -1503,10 +2544,66 @@
     el.setSelectionRange(a + token.length, a + token.length);
     el.dispatchEvent(new Event('input', { bubbles: true }));
   }
+
+  /* links: [text](address) in the email text, added or changed with a small dialog */
+  const linkEdit = { el: null, start: 0, end: 0, existing: false };
+  function openLinkDialog(el) {
+    el = el && el.matches && el.matches('textarea') ? el : (lastTplField && document.contains(lastTplField) && lastTplField.tagName === 'TEXTAREA' ? lastTplField : $('#composeBody textarea'));
+    if (!el || readOnly) return;
+    const a = el.selectionStart ?? el.value.length, b = el.selectionEnd ?? a;
+    const hit = C.linkAt(el.value, a);
+    Object.assign(linkEdit, hit && b <= hit.end ? { el, start: hit.start, end: hit.end, existing: true } : { el, start: a, end: b, existing: false });
+    $('#ldText').value = hit && linkEdit.existing ? hit.label : el.value.slice(a, b).replace(/\n/g, ' ');
+    $('#ldUrl').value = hit && linkEdit.existing ? hit.url : '';
+    $('#ld-title').textContent = linkEdit.existing ? 'Change the link' : 'Add a link';
+    $('#ldGo').textContent = linkEdit.existing ? 'Save link' : 'Add link';
+    $('#ldRemove').hidden = !linkEdit.existing;
+    checkLinkDialog();
+    $('#linkDlg').showModal();
+    ($('#ldText').value ? $('#ldUrl') : $('#ldText')).focus();
+  }
+  function linkAddress() {
+    const u = $('#ldUrl').value.trim();
+    if (/^\{\{\s*[\w.-]+\s*\}\}$/.test(u)) return u.replace(/\s+/g, '');
+    const href = C.linkHref(u);
+    return href ? (href.startsWith('mailto:') && !/^mailto:/i.test(u) ? u : href) : '';
+  }
+  function checkLinkDialog() {
+    const u = $('#ldUrl').value.trim();
+    const ok = linkAddress();
+    $('#ldHint').textContent = !u ? 'A web address, an email address, or a project detail such as {{task_link}} or {{website}}.'
+      : ok ? (ok.startsWith('{{') ? `Filled in from the project when you use the template.` : `Opens ${ok.replace(/^mailto:/i, 'a new email to ')}`) : 'That isn’t a web or email address.';
+    $('#ldGo').disabled = !ok;
+  }
+  $('#ldUrl').addEventListener('input', checkLinkDialog);
+  function applyLink(remove) {
+    const { el, start, end } = linkEdit;
+    if (!el || !document.contains(el)) { $('#linkDlg').close(); return; }
+    const url = linkAddress();
+    if (!remove && !url) return;
+    const label = $('#ldText').value.trim();
+    const text = remove ? label : C.linkMarkup(label || url.replace(/^mailto:/i, ''), url);
+    el.value = el.value.slice(0, start) + text + el.value.slice(end);
+    $('#linkDlg').close();
+    el.focus();
+    el.setSelectionRange(start + text.length, start + text.length);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  // The email as it will be sent: from your own changes when you made some, otherwise from the template.
   function currentEmail() {
     const t = tplById(ui.mail.tpl);
-    const c = t[mailLang(t)], v = mailValues(t);
-    return { subject: C.fill(c.subject, v), body: C.fill(c.body, v), blanks: C.placeholders(c.subject + '\n' + c.body).filter(x => !v[x]).length };
+    const lang = mailLang(t);
+    const own = draft().text[lang];
+    const c = own || t[lang], v = mailValues(t);
+    const subject = own ? own.subject : C.fill(c.subject, v);
+    const body = own ? own.body : C.fill(c.body, v);
+    return { subject: C.plainMail(subject), body: C.plainMail(body), raw: body, blanks: C.placeholders(subject + '\n' + body).length };
+  }
+  function mailTo() {
+    const t = tplById(ui.mail.tpl);
+    const d = draft();
+    return d.toTouched ? d.to : C.autoValues(proj(ui.mail.project), D.settings.me, mailLang(t), today()).spoc_email || '';
   }
 
   /* ---------- asking an AI assistant ---------- */
@@ -1523,32 +2620,13 @@
     });
   }
 
-  /* ---------- importing version 0.1 data ---------- */
-  $('#importFile').addEventListener('change', async e => {
-    const file = e.target.files && e.target.files[0];
-    e.target.value = '';
-    if (!file || readOnly) return;
-    let data;
-    try { data = JSON.parse(await file.text()); } catch { toast('That file isn’t a backup: it couldn’t be read as JSON.'); return; }
-    const r = C.importV01(data, uid);
-    const have = new Set(D.templates.map(t => t.name.trim().toLowerCase()));
-    const haveP = new Set(D.projects.map(p => p.name.trim().toLowerCase()));
-    const tpls = r.templates.filter(t => !have.has(t.name.trim().toLowerCase()));
-    const projs = r.projects.filter(p => !haveP.has(p.name.trim().toLowerCase()));
-    if (!r.templates.length && !r.projects.length) { toast('No templates or projects were found in that file.'); return; }
-    D.templates.push(...tpls);
-    for (const p of projs) { p.schedule = C.scheduleFrom(D.settings.defaultSchedule, uid); newProject(p); p.num = C.nextNumber(D.projects.filter(x => x !== p)); }
-    changed();
-    render();
-    const skipped = r.templates.length - tpls.length + r.projects.length - projs.length;
-    toast(`Imported ${tpls.length} ${tpls.length === 1 ? 'template' : 'templates'} and ${projs.length} ${projs.length === 1 ? 'project' : 'projects'}` +
-      (skipped ? `; ${skipped} already here were skipped` : ''));
-  });
-
   /* ---------- actions ---------- */
   function goToDate(date) {
     flush();
     closePicker();
+    sugHide();
+    ui.meetingText = '';
+    ui.meetingRef = null;
     ui.date = date;
     render();
   }
@@ -1571,7 +2649,7 @@
     },
     'goals-dismiss': () => { ensureWeek(week()).dismissed = true; changed(); renderBanners(); },
     menu: el => toggleMenu(el.getAttribute('aria-expanded') !== 'true'),
-    'copy-day': () => { toggleMenu(false); copy(C.dayAsText(viewDay(ui.date), ui.date, (D.weeks[week()] || {}).goals, today()), 'Day copied as text'); },
+    'copy-day': () => { toggleMenu(false); copy(C.dayAsText(viewDay(ui.date), ui.date, (D.weeks[week()] || {}).goals, today(), agendaLines(ui.date)), 'Day copied as text'); },
     'copy-week': () => { toggleMenu(false); copy(C.weekSummary(D.days, week(), id => { const p = proj(id); return p ? projectTitle(p) : ''; }), 'Week summary copied'); },
     settings: () => { toggleMenu(false); openSettings(); },
     'choose-folder': () => chooseFolder(),
@@ -1611,7 +2689,7 @@
     },
     'batch-duplicate': () => {
       if (readOnly || !ui.sel.size) return;
-      const list = D.projects.filter(p => ui.sel.has(p.id)).sort(SORTS.number);
+      const list = D.projects.filter(p => ui.sel.has(p.id)).sort(byNum);
       const made = list.map(p => newProject(C.duplicateProject(p, D.projects, uid)));
       ui.sel = new Set(made.map(p => p.id));
       changed();
@@ -1623,6 +2701,7 @@
       const list = D.projects.filter(p => ui.sel.has(p.id));
       const restore = list.every(p => p.archived);
       for (const p of list) p.archived = !restore;
+      C.renumberProjects(D.projects);
       changed();
       renderProjectList();
       toast(`${restore ? 'Restored' : 'Archived'} ${list.length} ${list.length === 1 ? 'project' : 'projects'}`);
@@ -1636,7 +2715,7 @@
         a: 'Delete', b: 'Archive'
       });
       if (ans === 'a') { deleteProjects(list.map(p => p.id)); toast(`Deleted ${list.length} ${list.length === 1 ? 'project' : 'projects'}`); }
-      else if (ans === 'b') for (const p of list) p.archived = true;
+      else if (ans === 'b') { for (const p of list) p.archived = true; C.renumberProjects(D.projects); }
       else return;
       changed();
       renderProjectList();
@@ -1685,8 +2764,9 @@
       const p = proj(ui.project);
       if (!p || readOnly) return;
       p.archived = !p.archived;
+      C.renumberProjects(D.projects);
       changed();
-      toast(p.archived ? 'Archived. It stays in the Archived list.' : 'Restored to your projects');
+      toast(p.archived ? 'Archived. It stays in the Archived list.' : `Restored to your projects, as #${p.num}`);
       renderProjects();
     },
     'project-delete': async () => {
@@ -1694,7 +2774,7 @@
       if (!p || readOnly) return;
       const ans = await ask({ title: `Delete ${projectTitle(p)}?`, body: 'Its details, schedule and to-dos will be removed. Tasks already in your daily plans stay, without the link. To keep it out of the way instead, archive it.', a: 'Delete', b: 'Archive' });
       if (ans === 'a') { deleteProjects([p.id]); changed(); setView('projects', { project: null }); toast('Project deleted'); }
-      else if (ans === 'b') { p.archived = true; changed(); renderProjects(); }
+      else if (ans === 'b') { p.archived = true; C.renumberProjects(D.projects); changed(); renderProjects(); }
     },
     'project-mail': () => { ui.mail.project = ui.project; ui.mail.tpl = null; setView('mail'); },
     'open-link': el => {
@@ -1712,27 +2792,62 @@
       toast(added ? 'Added to today’s plan' : 'Already in today’s plan');
     },
     'tpl-open': el => openTemplate(el.dataset.tid),
-    'mail-back': () => { flush(); ui.mail.tpl = null; ui.mail.editing = false; renderMail(); },
-    'tpl-new': () => {
-      if (readOnly) return;
-      const t = { id: uid(), name: '', ...Object.fromEntries(C.LANGS.map(l => [l, { subject: '', body: '' }])) };
-      D.templates.push(t);
-      changed();
-      openTemplate(t.id);
-      ui.mail.editing = true;
-      ui.mail.lang = D.settings.me.lang;
-      renderMail();
-      $('[data-tpl="name"]').focus();
+    'mail-back': () => { tidyDrafts(); flush(); ui.mail.tpl = null; ui.mail.editing = false; renderMail(); },
+    'tpl-new': () => openTemplatePicker(),
+    'cal-add': () => openCalAdd(),
+    'cal-save': () => saveCalAdd(),
+    'cal-file': () => { if (!readOnly) $('#icsFile').click(); },
+    'cal-refresh': () => refreshCalendars(true),
+    'cal-refresh-one': el => {
+      const c = calById(el.closest('[data-cal]').dataset.cal);
+      if (!c) return;
+      if (fetched[c.id]) fetched[c.id].at = 0;
+      refreshCalendars(false);
+      renderCalList();
     },
-    'tpl-seed': () => {
-      if (readOnly) return;
-      for (const x of missingStarters()) {
-        const t = sameStarter(x);
-        if (!t) { D.templates.push({ id: uid(), name: x.name, ...Object.fromEntries(C.LANGS.map(l => [l, { ...x[l] }])) }); continue; }
-        for (const l of C.LANGS) if (!tplLangs(t).includes(l)) t[l] = { ...x[l] };
-      }
+    'cal-remove': async el => {
+      const c = calById(el.closest('[data-cal]').dataset.cal);
+      if (!c || readOnly) return;
+      if (await ask({ title: `Remove ${c.name || 'this calendar'}?`, body: 'Its events stop showing in the plan. Your calendar itself isn’t changed.', a: 'Remove', b: '' }) !== 'a') return;
+      D.calendars = D.calendars.filter(x => x !== c);
+      delete fetched[c.id];
+      saveFetched();
+      calCache.delete(c.id);
       changed();
-      renderMail();
+      renderCalList();
+      if (ui.view === 'plan') { renderAgenda(); renderBudget(); }
+    },
+    'meeting-remove': el => { const m = meetingOf(el); if (m) removeMeeting(m.id); },
+    'ev-open': el => Backend.open(el.dataset.url).catch(e => toast(String(e))),
+    'tp-use': () => useTemplatePick(),
+    'cat-new': () => {
+      if (readOnly) return;
+      const c = { id: uid(), name: 'New category' };
+      D.templateCats.push(c);
+      ui.renameCat = c.id;
+      changed();
+      renderTemplateList();
+    },
+    'cat-rename': el => { ui.renameCat = el.closest('[data-sort-id]').dataset.sortId; renderTemplateList(); },
+    'cat-toggle': el => {
+      const c = catById(el.closest('[data-sort-id]').dataset.sortId);
+      if (!c) return;
+      c.collapsed = !c.collapsed;
+      if (!c.collapsed) delete c.collapsed;
+      changed();
+      renderTemplateList();
+      const again = $(`#tplItems [data-sort-id="${CSS.escape(c.id)}"] .cat-toggle`);
+      if (again) again.focus();
+    },
+    'cat-delete': async el => {
+      const c = catById(el.closest('[data-sort-id]').dataset.sortId);
+      if (!c || readOnly) return;
+      const n = D.templates.filter(t => t.cat === c.id).length;
+      if (n && await ask({ title: `Delete the ${c.name.trim() || 'untitled'} category?`, body: `Its ${n === 1 ? 'template moves' : `${n} templates move`} to Uncategorised. No template is deleted.`, a: 'Delete category', b: '' }) !== 'a') return;
+      D.templateCats = D.templateCats.filter(x => x !== c);
+      for (const t of D.templates) if (t.cat === c.id) t.cat = '';
+      changed();
+      renderTemplateList();
     },
     'tpl-edit': () => {
       if (readOnly) return;
@@ -1746,6 +2861,7 @@
       const ans = await ask({ title: `Delete ${t.name.trim() || 'this template'}?`, body: 'Every language version of it will be removed.', a: 'Delete', b: '' });
       if (ans !== 'a') return;
       D.templates = D.templates.filter(x => x !== t);
+      for (const k of Object.keys(D.drafts)) if (k.startsWith(`${t.id}|`)) delete D.drafts[k];
       changed();
       ui.mail.tpl = null;
       ui.mail.editing = false;
@@ -1762,11 +2878,42 @@
       const e = currentEmail();
       const left = e.blanks ? `, with ${e.blanks} ${e.blanks === 1 ? 'blank' : 'blanks'} still empty` : '';
       if (el.dataset.what === 'subject') copy(e.subject, 'Subject copied' + left);
+      else if (C.htmlMail(e.raw).includes('<a ')) copyRich(C.htmlMail(e.raw), e.body, 'Email copied, with its links' + left);
       else copy(e.body, 'Email copied' + left);
     },
+    'mail-edittext': () => {
+      const t = tplById(ui.mail.tpl);
+      if (!t || readOnly) return;
+      const lang = mailLang(t), c = t[lang], v = mailValues(t);
+      draftForWrite().text[lang] = { subject: C.fill(c.subject, v), body: C.fill(c.body, v) };
+      changed();
+      renderCompose(t);
+      const body = $('[data-mtext="body"]');
+      if (body) { body.focus(); body.setSelectionRange(0, 0); body.scrollTop = 0; }
+    },
+    'mail-unedit': async () => {
+      const t = tplById(ui.mail.tpl);
+      if (!t || readOnly) return;
+      if (await ask({ title: 'Go back to the template’s text?', body: 'The changes you made to this email will be lost. What you filled in the blanks stays.', a: 'Go back', b: '' }) !== 'a') return;
+      delete draftForWrite().text[mailLang(t)];
+      tidyDrafts();
+      changed();
+      renderCompose(t);
+    },
+    'mail-clear': async () => {
+      const t = tplById(ui.mail.tpl);
+      if (!t || readOnly) return;
+      if (await ask({ title: 'Clear this email?', body: 'What you filled in, the address and any changes to the text go back to the template.', a: 'Clear', b: '' }) !== 'a') return;
+      delete D.drafts[draftKey()];
+      changed();
+      renderCompose(t);
+    },
+    'link-open': () => openLinkDialog(lastTplField),
+    'link-apply': () => applyLink(false),
+    'link-remove': () => applyLink(true),
     'mail-open': () => {
       const e = currentEmail();
-      const url = C.mailto(ui.mail.to.trim(), e.subject, e.body);
+      const url = C.mailto(mailTo().trim(), e.subject, e.body);
       Backend.open(url).catch(err => toast(String(err)));
       if (url.length > 2000) toast('Long email: if your mail app cuts it short, use Copy email instead.');
     },
@@ -1774,7 +2921,7 @@
     'md-choose': () => $('#mdFiles').click(),
     'md-import': () => importParsed(),
     'project-export': () => { const p = proj(ui.project); if (p) exportProjects([p]); },
-    'batch-export': () => exportProjects(D.projects.filter(p => ui.sel.has(p.id)).sort(SORTS.number)),
+    'batch-export': () => exportProjects(D.projects.filter(p => ui.sel.has(p.id)).sort(byNum)),
     'sheet-tab': el => {
       ui.sheetTab = el.dataset.tab;
       const p = proj(ui.project);
@@ -1867,15 +3014,14 @@
       const t = tplById(ui.mail.tpl);
       if (!t) return;
       const e = currentEmail();
-      askAssistant(C.reviewPrompt(mailLang(t), e.subject, e.body, false), 'Review request');
+      askAssistant(C.reviewPrompt(mailLang(t), e.subject, e.raw, false), 'Review request');
     },
     'tpl-review': () => {
       const t = tplById(ui.mail.tpl);
       if (!t) return;
       const c = t[mailLang(t)];
       askAssistant(C.reviewPrompt(mailLang(t), c.subject, c.body, true), 'Review request');
-    },
-    'import-v01': () => { toggleMenu(false); if ($('#settings').open) $('#settings').close(); $('#importFile').click(); }
+    }
   };
   document.addEventListener('click', e => {
     const a = e.target.closest('[data-act]');
@@ -1897,6 +3043,35 @@
     menu.hidden = !open;
     btn.setAttribute('aria-expanded', String(open));
     if (open) menu.querySelector('button').focus();
+  }
+
+  // Copies the email as rich text, so links stay clickable when pasted into Mail, Gmail or Outlook.
+  async function copyRich(html, text, done) {
+    try {
+      if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
+        await navigator.clipboard.write([new ClipboardItem({
+          'text/html': new Blob([html], { type: 'text/html' }),
+          'text/plain': new Blob([text], { type: 'text/plain' })
+        })]);
+        toast(done);
+        return;
+      }
+    } catch {}
+    const box = document.createElement('div');
+    box.contentEditable = 'true';
+    box.innerHTML = html;
+    box.style.cssText = 'position:fixed;left:-10000px;top:0;white-space:normal';
+    document.body.append(box);
+    const range = document.createRange();
+    range.selectNodeContents(box);
+    const sel = getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch {}
+    sel.removeAllRanges();
+    box.remove();
+    if (ok) toast(done); else copy(text, done);
   }
 
   async function copy(text, done) {
@@ -1943,6 +3118,7 @@
     $('#defEnd').value = D.settings.end;
     $('#defBegin').disabled = $('#defEnd').disabled = !!readOnly;
     $('#version').textContent = `Valleverde PM ${APP_VERSION}`;
+    renderCalList();
     for (const k of document.querySelectorAll('[data-mod]')) k.textContent = MOD;
     for (const k of document.querySelectorAll('[data-alt]')) k.textContent = isMac ? 'Option' : 'Alt';
   }
@@ -2035,8 +3211,8 @@
     else if (e.key === 'n' || e.key === 'N') { e.preventDefault(); tasksOL.focusGhost(); }
   });
   window.addEventListener('blur', () => flush());
-  window.addEventListener('focus', () => checkExternalChange());
-  document.addEventListener('visibilitychange', () => { if (document.hidden) flush(); else checkExternalChange(); });
+  window.addEventListener('focus', () => { checkExternalChange(); refreshCalendars(); });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) flush(); else { checkExternalChange(); refreshCalendars(); } });
   window.addEventListener('beforeunload', () => flush());
 
   function tick() {
@@ -2047,6 +3223,8 @@
       if (follow) { goToDate(t); return; }
     }
     renderBudget();
+    if (ui.view === 'plan') renderAgenda();
+    refreshCalendars();
   }
 
   async function boot() {
@@ -2059,6 +3237,7 @@
     $('#app').hidden = false;
     render();
     setInterval(tick, 30000);
+    refreshCalendars();
     if (!readOnly && !D.days[ui.date] && !weekGoals().length && !Object.keys(D.days).length) tasksOL.focusGhost();
   }
   boot();

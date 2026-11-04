@@ -2,11 +2,12 @@
 
 A small desktop planner for project managers, for the step before Odoo. It works like a daily to-do note that does the time maths for you:
 
+- **Agenda:** today's meetings, typed in the plan or from your calendar (Google, Outlook, iCloud or a calendar file), with their time taken out of the free time.
 - **Week goals** for the projects that matter this week.
 - **Tasks:** projects and their time-boxed actions, like `15m FU` or `Icons - 2h`.
 - **Time left:** the durations in your open lines, added up and compared with what remains of your working day.
-- **Projects:** a numbered sheet per project with its to-dos, schedule, SPOC, DB, current website, version, task link, deadline, BA, salesperson, languages involved, goal, references, apps, sitemap and notes.
-- **Mail templates** in English, Spanish, French and Italian that fill in from the project, with a language review by Claude.
+- **Projects:** in your own order, with a sheet per project with its to-dos, schedule, SPOC, DB, current website, version, task link, deadline, BA, salesperson, languages involved, goal, references, apps, sitemap and notes.
+- **Mail templates** in English, Spanish, French and Italian, in categories, with links, 12 suggested templates, and a language review by Claude. They fill in from the project.
 - **Website copy:** page-by-page copy for web design projects, in each of the site's languages.
 
 Everything is saved to one file on your computer. Switch between Plan, Projects and Mail with the tabs or ⌘1, ⌘2, ⌘3.
@@ -24,23 +25,37 @@ Type the way you would in a note. Write a duration anywhere in a line (`15m`, `2
 | ← → T | Previous day, next day, today (when not typing) |
 | N | Add a task (when not typing) |
 | ⌘+L | Link a task to a project or one of its to-dos |
+| ⌘+K | Add or change a link, while writing an email |
+| ↑ / ↓ on the dots | Move a project or a template |
 | ⌘+, | Settings |
 
 You can also drag a line by the dots to its left.
 
+- **Picking a project as you type:** on an empty project line, a list of your projects opens and narrows as you type a name or a number. Return or a click links the line and opens an action line under it; **Create project “…”** makes a new one. Under a linked project, an empty action line lists its open to-dos. Nothing is picked unless it's highlighted, so free text stays free, and Esc closes the list.
 - **Linking tasks:** hover a task and choose **Link**, or press ⌘L, to link it to a project. The picker finds projects by name or number.
   - For a single task or an action, you can then pick one of the project's open to-dos, or add the task as a new to-do. Checking it off in either place checks both.
   - Actions under a linked project line belong to that project.
 - **Projects and goals:** a task whose text, or linked project, matches a week goal shows “Goal 1”, “Goal 2”, and so on. The goal shows how much time is planned for it today. Numbering like `1 - Partena` or `1. Partena` is ignored when matching.
 - **Done items:** checking every action of a project checks the project, and done projects collect at the bottom.
 - **Moving work:** when a previous day still has open tasks, a banner offers to bring them over. The originals are marked “Moved to …”, so nothing is counted twice. Open goals carry over the same way at the start of a week.
-- **Sharing:** the ⋯ menu copies the day as text, in the same format as the note, or a week summary with the time done per project, ready for entering timesheets in Odoo. Linked tasks count under their project.
+- **Sharing:** the ⋯ menu, in the plan, copies the day as text (with the agenda), in the same format as the note, or a week summary with the time done per project, ready for entering timesheets in Odoo. Linked tasks count under their project.
+
+## Agenda
+
+**Your own meetings:** in the plan's Agenda, type a meeting on the “Add a meeting” line and press Return: `10:00 Partena kick-off`, `10:00–11:30 Steering committee` or `14:30 1h Call Mayra`. Times can be written `10:00`, `9.30`, `10h30` or `2:30pm`; without a length, a meeting lasts 30 minutes. Typing a project's name after the time offers to link it. Click a time or a title to change it; clear the title and press Backspace, or choose **Remove**, to delete it. These are one-off meetings, saved in your data file.
+
+**From your calendar:** Settings, then **Calendars**, then **Add a calendar…** takes a calendar's secret address in iCal format. **Where to find it** in that window explains the steps for Google Calendar, Outlook and iCloud. Company accounts often don't allow secret addresses. Then export the calendar instead (in Google Calendar: Settings, then Import & export, then Export) and use **Import a calendar file…**: it takes `.ics` and `.ical` files, and Google's `.zip` export, which adds one calendar per file inside it. Import the same file again to update it.
+
+- **In the plan:** the day's meetings, with all-day events first. Past ones fade, the current one is highlighted, and **Join** opens a Meet, Teams or Zoom link.
+- **Free time:** meetings inside your working hours count against the free time, shown under the day ribbon as a blue band. Settings has a switch to turn this off.
+- **Refreshing:** calendars added by address refresh every 15 minutes while the app is open, when you come back to it, and with **Refresh**. An imported file shows what it had when you imported it; choose **Update** next to it in Settings and pick the file again to refresh it.
+- **Read-only:** the app never changes your calendar.
 
 ## Projects
 
-**New project** opens a sheet with the next number. Change the number next to the name to match Odoo; the sheet warns if another project already uses it.
+The list is in your own order. Drag a project by the dots to its left, or focus the dots and use ↑ and ↓. Its number is its place in the list, and follows it. Typing another number next to a project's name moves it there. New, imported and restored projects go to the bottom.
 
-- **The list** sorts by number, deadline or name. It shows each project's first SPOC, its next phase, open to-dos and how soon it's due.
+- **The list** shows each project's first SPOC, its next phase, open to-dos and how soon it's due.
 - **Select** lets you pick several projects to **Duplicate**, **Archive** or **Delete** together. **Duplicate** on a sheet copies one project, with everything reset to not done.
 - **Project schedule:** a list of phases, each with an optional date and a check when done. New projects start with the list from Settings, which is Homepage design + design line definition, Website design, Content review / adjustments, Training / Q&A, Go live. Press Return in a phase to add one after it.
 - **Dates:** the deadline and phase dates can stay empty (“No deadline”, “No date”) and be removed once set.
@@ -74,7 +89,7 @@ Write each template in English, Spanish, French or Italian (or several), with th
 
 | Placeholder | Filled with |
 |---|---|
-| `{{project}}`, `{{project_number}}` | The project name and number |
+| `{{project}}`, `{{project_number}}` | The project name, and its number in the list |
 | `{{first_name}}`, `{{contact}}` | The first SPOC's first name and full name |
 | `{{spoc_email}}` | Every email address in the SPOC field |
 | `{{spoc}}`, `{{db}}`, `{{website}}`, `{{version}}`, `{{task_link}}`, `{{ba}}`, `{{languages}}`, `{{goal}}`, `{{sitemap}}`, `{{apps}}`, `{{notes}}` | That field of the project |
@@ -85,16 +100,21 @@ Write each template in English, Spanish, French or Italian (or several), with th
 
 Anything else, like `{{next_steps}}`, becomes a blank to fill in, and the preview marks blanks that are still empty. **Copy email** copies the text; **Open in mail app** starts a new email to every SPOC address. Very long emails can get cut short by some mail apps on the way, so copy those instead.
 
+- **New template** offers 12 suggested templates, each in four languages, with a preview, or a blank template. A suggestion goes into a category of the same name.
+- **Categories:** **New category** adds one. Drag templates by their dots to reorder them or move them to another category; categories fold, and are renamed, deleted or dragged the same way. Deleting a category keeps its templates, in Uncategorised.
+- **Links:** select some text in a template or an email, then choose **Link…** or press ⌘K. A link is written `[text](address)`, and the address can be a web address, an email address or a project detail, like `[the project task]({{task_link}})`. **Copy email** keeps links clickable when you paste into Mail, Gmail or Outlook. **Open in mail app** can only send plain text, so links appear as text with the address in brackets.
+- **What you write is kept:** the blanks you fill in, the address, and any change to the text, per template and project, until you choose **Clear**. **Change the text of this email** lets you edit the final email directly; **Back to the template's text** undoes that.
+
 **Review with Claude**, on an email or on a template you're editing, opens a new chat with a request to check spelling, grammar and tone in the email's language. It changes nothing in the app: you read the corrected version in Claude and copy it from there.
 
 - **Which assistant:** Settings, then Language review and copywriting. Choose Claude in the desktop app (the default), Claude or ChatGPT in the browser, or Gemini.
-- **Signing in:** the request opens in your own account, with your existing subscription. The app needs no API key and makes no network requests.
+- **Signing in:** the request opens in your own account, with your existing subscription. The app needs no API key.
 - **Sending:** Claude waits for you to press send. ChatGPT sends straight away.
 - **Gemini, or long requests:** Gemini can't receive a request through a link, and very long requests don't fit in one. In those cases the request is copied for you to paste.
 
 Spelling and grammar checks are on while you write templates, blanks and website copy, using the languages enabled in System Settings, then Keyboard, then Text Input.
 
-**Write an email** on a project sheet opens the templates with that project chosen. Each project's email language is set in its Details. If you have a backup from version 0.1, **Import from version 0.1…** in the ⋯ menu adds its templates and projects.
+**Write an email** on a project sheet opens the templates with that project chosen. Each project's email language is set in its Details.
 
 ## Website copy
 
@@ -111,7 +131,7 @@ The **Website copy** tab on a project holds the text for each page of the site.
 Your data lives in `valleverde.json`, saved as you type. Before the first change each day, a copy goes to `backups/` next to it; the last 30 are kept.
 
 - **Where it starts:** in the app's data folder. On macOS that's `~/Library/Application Support/com.karlosvalverde.valleverdepm/`.
-- **Moving it:** Settings, then **Choose folder…**. Pick a folder in iCloud Drive and the same file works on your other Macs; the app reloads it when you come back to the window. If both Macs edit at the same moment, the last save wins, and the backups folder has the earlier copies.
+- **Moving it:** Settings, then **Choose folder…**. Pick a folder in iCloud Drive and the same file works on your other Macs; the app reloads it when you come back to the window, unless you're typing, and ignores an older copy that a sync puts back. If both Macs edit at the same moment, the last save wins, and the backups folder has the earlier copies.
 - **Restoring a backup:** quit the app, copy a file from `backups/` over `valleverde.json`, and open the app again.
 
 See [PRIVACY.md](PRIVACY.md).

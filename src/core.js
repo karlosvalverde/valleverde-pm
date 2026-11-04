@@ -213,13 +213,14 @@
   /* ---------- text exports ---------- */
   const box = done => (done ? '- [x] ' : '- [ ] ');
 
-  function dayAsText(day, date, goals, today) {
+  function dayAsText(day, date, goals, today, agenda) {
     const { left, done } = dayMinutes(day);
     const out = [fmtDots(date)];
     if (date < today) out.push(`Done: ${fmtDur(done)}`, `Not done: ${fmtDur(left)}`);
     else out.push(`Time left: ${fmtDur(left)}`);
     if (day.begin) out.push(`Begin: ${day.begin.replace(/^0/, '')}`);
     if (day.end) out.push(`End: ${day.end.replace(/^0/, '')}`);
+    if (agenda && agenda.length) out.push('', 'Agenda', ...agenda.map(x => `- ${x}`));
     const g = (goals || []).filter(x => x.text.trim());
     if (g.length) out.push('', 'Week goals', ...g.map(x => box(x.done) + x.text));
     const L = (day.lines || []).filter(x => x.text.trim());
@@ -409,58 +410,74 @@
   const mailto = (to, subject, body) =>
     `mailto:${encodeURIComponent(to || '').replace(/%40/g, '@')}?subject=${encodeURIComponent(subject || '')}&body=${encodeURIComponent(body || '')}`;
 
-  const tpl = (name, en, es, fr, it) => ({
-    name, en: { subject: en[0], body: en[1] }, es: { subject: es[0], body: es[1] },
+  // The suggestion library: one template per kind of email, in four languages, grouped by category.
+  const TEMPLATE_CATEGORIES = ['Project start', 'Meetings', 'Updates', 'Follow-ups', 'Review and delivery', 'Closing'];
+  const tpl = (name, cat, about, en, es, fr, it) => ({
+    name, cat, about, en: { subject: en[0], body: en[1] }, es: { subject: es[0], body: es[1] },
     fr: { subject: fr[0], body: fr[1] }, it: { subject: it[0], body: it[1] }
   });
   const STARTER_TEMPLATES = [
-    tpl('Follow-up',
-      ['{{project}}: following up', 'Hi {{first_name}},\n\nI’m following up on {{topic}}. Could you let me know where things stand when you have a moment?\n\nThanks,\n{{signature}}'],
-      ['{{project}}: seguimiento', 'Hola {{first_name}}:\n\nTe escribo para hacer seguimiento de {{topic}}. ¿Me puedes indicar cómo va cuando tengas un momento?\n\nGracias,\n{{signature}}'],
-      ['{{project}}\u00a0: suivi', 'Bonjour {{first_name}},\n\nJe reviens vers vous au sujet de {{topic}}. Pourriez-vous me dire où en sont les choses quand vous aurez un moment\u00a0?\n\nMerci,\n{{signature}}'],
-      ['{{project}}: aggiornamento', 'Buongiorno {{first_name}},\n\nLe scrivo per avere un aggiornamento su {{topic}}. Quando ha un momento, potrebbe dirmi a che punto siamo?\n\nGrazie,\n{{signature}}']),
-    tpl('Meeting recap',
+    tpl('Kick-off', 'Project start', 'Introduce yourself, share the plan and propose the kick-off meeting.',
+      ['{{project}}: kick-off', 'Hi {{first_name}},\n\nI’m {{my_name}}, and I’ll be managing {{project}}. I’m looking forward to working with you.\n\nTo get started, I’d like to set up a kick-off meeting to go over the goals, the scope and the schedule. Would {{proposed_date}} suit you?\n\nThis is the plan we’ll follow:\n{{schedule}}\n\nYou can follow the project in [the project task]({{task_link}}).\n\nBest regards,\n{{signature}}'],
+      ['{{project}}: inicio del proyecto', 'Hola {{first_name}}:\n\nSoy {{my_name}} y voy a gestionar el proyecto {{project}}. Tengo muchas ganas de trabajar contigo.\n\nPara empezar, me gustaría organizar una reunión de inicio para repasar los objetivos, el alcance y el calendario. ¿Te viene bien el {{proposed_date}}?\n\nEste es el plan que seguiremos:\n{{schedule}}\n\nPuedes seguir el proyecto en [la tarea del proyecto]({{task_link}}).\n\nUn saludo,\n{{signature}}'],
+      ['{{project}}\u00a0: lancement du projet', 'Bonjour {{first_name}},\n\nJe suis {{my_name}} et je piloterai le projet {{project}}. Je me réjouis de travailler avec vous.\n\nPour commencer, je vous propose une réunion de lancement afin de passer en revue les objectifs, le périmètre et le planning. Le {{proposed_date}} vous conviendrait-il\u00a0?\n\nVoici le planning que nous suivrons\u00a0:\n{{schedule}}\n\nVous pouvez suivre l’avancement dans [la tâche du projet]({{task_link}}).\n\nBien cordialement,\n{{signature}}'],
+      ['{{project}}: avvio del progetto', 'Buongiorno {{first_name}},\n\nsono {{my_name}} e seguirò il progetto {{project}}. Non vedo l’ora di lavorare insieme.\n\nPer iniziare, vorrei organizzare una riunione di avvio per rivedere gli obiettivi, il perimetro e la pianificazione. Le andrebbe bene il {{proposed_date}}?\n\nQuesta è la pianificazione che seguiremo:\n{{schedule}}\n\nPuò seguire l’avanzamento nel [task del progetto]({{task_link}}).\n\nCordiali saluti,\n{{signature}}']),
+    tpl('Meeting invitation', 'Meetings', 'Invite the client to a meeting, with the agenda and a link to join.',
+      ['{{project}}: meeting on {{meeting_date}}', 'Hi {{first_name}},\n\nI’d like to invite you to a meeting about {{topic}} on {{meeting_date}}.\n\nAgenda:\n{{agenda}}\n\n[Join the meeting]({{meeting_link}})\n\nIf that time doesn’t suit you, let me know and I’ll find another one.\n\nBest regards,\n{{signature}}'],
+      ['{{project}}: reunión el {{meeting_date}}', 'Hola {{first_name}}:\n\nTe invito a una reunión sobre {{topic}} el {{meeting_date}}.\n\nOrden del día:\n{{agenda}}\n\n[Unirse a la reunión]({{meeting_link}})\n\nSi no te viene bien, dímelo y buscamos otro momento.\n\nUn saludo,\n{{signature}}'],
+      ['{{project}}\u00a0: réunion le {{meeting_date}}', 'Bonjour {{first_name}},\n\nJe vous propose une réunion au sujet de {{topic}} le {{meeting_date}}.\n\nOrdre du jour\u00a0:\n{{agenda}}\n\n[Rejoindre la réunion]({{meeting_link}})\n\nSi ce créneau ne vous convient pas, dites-le-moi et nous en trouverons un autre.\n\nBien cordialement,\n{{signature}}'],
+      ['{{project}}: riunione il {{meeting_date}}', 'Buongiorno {{first_name}},\n\nLa invito a una riunione su {{topic}} il {{meeting_date}}.\n\nOrdine del giorno:\n{{agenda}}\n\n[Partecipa alla riunione]({{meeting_link}})\n\nSe l’orario non Le va bene, me lo faccia sapere e troveremo un altro momento.\n\nCordiali saluti,\n{{signature}}']),
+    tpl('Meeting recap', 'Meetings', 'Sum up what was agreed and the next steps.',
       ['{{project}}: meeting recap, {{date}}', 'Hi {{first_name}},\n\nThanks for your time today. Here’s what we agreed:\n\n{{points}}\n\nNext steps:\n{{next_steps}}\n\nBest regards,\n{{signature}}'],
       ['{{project}}: resumen de la reunión del {{date}}', 'Hola {{first_name}}:\n\nGracias por tu tiempo hoy. Esto es lo que acordamos:\n\n{{points}}\n\nPróximos pasos:\n{{next_steps}}\n\nUn saludo,\n{{signature}}'],
       ['{{project}}\u00a0: compte rendu de la réunion du {{date}}', 'Bonjour {{first_name}},\n\nMerci pour votre temps aujourd’hui. Voici ce que nous avons convenu\u00a0:\n\n{{points}}\n\nProchaines étapes\u00a0:\n{{next_steps}}\n\nBien cordialement,\n{{signature}}'],
       ['{{project}}: resoconto della riunione del {{date}}', 'Buongiorno {{first_name}},\n\ngrazie per il tempo dedicato oggi. Ecco quanto abbiamo concordato:\n\n{{points}}\n\nProssimi passi:\n{{next_steps}}\n\nCordiali saluti,\n{{signature}}']),
-    tpl('Deadline reminder',
+    tpl('Heads-up', 'Updates', 'Let the client know about something coming up before it happens.',
+      ['{{project}}: heads-up about {{topic}}', 'Hi {{first_name}},\n\nA quick heads-up about {{topic}}: {{details}}\n\nI’ll keep you posted. In the meantime, let me know if you have any questions.\n\nBest regards,\n{{signature}}'],
+      ['{{project}}: aviso sobre {{topic}}', 'Hola {{first_name}}:\n\nTe escribo para avisarte sobre {{topic}}: {{details}}\n\nTe mantendré al tanto. Mientras tanto, si tienes cualquier duda, dímelo.\n\nUn saludo,\n{{signature}}'],
+      ['{{project}}\u00a0: information concernant {{topic}}', 'Bonjour {{first_name}},\n\nPour information, concernant {{topic}}\u00a0: {{details}}\n\nJe vous tiendrai au courant. D’ici là, n’hésitez pas si vous avez des questions.\n\nBien cordialement,\n{{signature}}'],
+      ['{{project}}: avviso su {{topic}}', 'Buongiorno {{first_name}},\n\nLe segnalo una novità su {{topic}}: {{details}}\n\nLe farò sapere gli sviluppi. Nel frattempo, resto a disposizione per qualsiasi domanda.\n\nCordiali saluti,\n{{signature}}']),
+    tpl('Status update', 'Updates', 'What was done, what comes next and what you need from the client.',
+      ['{{project}}: status update, week {{week}}', 'Hi {{first_name}},\n\nHere’s where {{project}} stands this week.\n\nDone:\n{{done}}\n\nNext:\n{{next_steps}}\n\nWhat we need from you:\n{{pending}}\n\nThe schedule:\n{{schedule}}\n\nBest regards,\n{{signature}}'],
+      ['{{project}}: estado del proyecto, semana {{week}}', 'Hola {{first_name}}:\n\nAsí va {{project}} esta semana.\n\nHecho:\n{{done}}\n\nPróximos pasos:\n{{next_steps}}\n\nLo que necesitamos de ti:\n{{pending}}\n\nCalendario:\n{{schedule}}\n\nUn saludo,\n{{signature}}'],
+      ['{{project}}\u00a0: point d’avancement, semaine {{week}}', 'Bonjour {{first_name}},\n\nVoici où en est {{project}} cette semaine.\n\nRéalisé\u00a0:\n{{done}}\n\nProchaines étapes\u00a0:\n{{next_steps}}\n\nCe dont nous avons besoin de votre part\u00a0:\n{{pending}}\n\nPlanning\u00a0:\n{{schedule}}\n\nBien cordialement,\n{{signature}}'],
+      ['{{project}}: stato di avanzamento, settimana {{week}}', 'Buongiorno {{first_name}},\n\necco a che punto è {{project}} questa settimana.\n\nCompletato:\n{{done}}\n\nProssimi passi:\n{{next_steps}}\n\nCosa ci serve da parte Sua:\n{{pending}}\n\nPianificazione:\n{{schedule}}\n\nCordiali saluti,\n{{signature}}']),
+    tpl('Delay notice', 'Updates', 'Announce a new date, why it moved and how you’ll limit the impact.',
+      ['{{project}}: change to the schedule', 'Hi {{first_name}},\n\nI’m writing to let you know that {{what}} will be delayed. It’s now planned for {{new_date}}, because {{reason}}.\n\nTo limit the impact, {{plan}}\n\nI’m sorry for the inconvenience. Let me know if you’d like to talk it through.\n\nBest regards,\n{{signature}}'],
+      ['{{project}}: cambio en el calendario', 'Hola {{first_name}}:\n\nTe escribo para avisarte de que {{what}} se va a retrasar. Ahora está previsto para el {{new_date}}, porque {{reason}}.\n\nPara limitar el impacto, {{plan}}\n\nSiento las molestias. Si quieres, lo comentamos en una llamada.\n\nUn saludo,\n{{signature}}'],
+      ['{{project}}\u00a0: modification du planning', 'Bonjour {{first_name}},\n\nJe vous informe que {{what}} prendra du retard. La nouvelle date prévue est le {{new_date}}, en raison de {{reason}}.\n\nPour en limiter l’impact, {{plan}}\n\nJe vous prie de nous excuser pour ce contretemps. N’hésitez pas si vous souhaitez en parler.\n\nBien cordialement,\n{{signature}}'],
+      ['{{project}}: modifica della pianificazione', 'Buongiorno {{first_name}},\n\nLe comunico che {{what}} subirà un ritardo. La nuova data prevista è il {{new_date}}, a causa di {{reason}}.\n\nPer limitarne l’impatto, {{plan}}\n\nCi scusiamo per il disagio. Se vuole, possiamo parlarne in una breve chiamata.\n\nCordiali saluti,\n{{signature}}']),
+    tpl('Change request', 'Updates', 'Reply to a request outside the scope, with the effort and the impact.',
+      ['{{project}}: change request', 'Hi {{first_name}},\n\nThanks for your request about {{change}}. It isn’t part of the current scope, so here is what it involves:\n\n- Estimated effort: {{effort}}\n- Impact on the schedule: {{impact}}\n\nCould you confirm whether you’d like us to go ahead?\n\nBest regards,\n{{signature}}'],
+      ['{{project}}: solicitud de cambio', 'Hola {{first_name}}:\n\nGracias por tu petición sobre {{change}}. No forma parte del alcance actual, así que te detallo lo que supone:\n\n- Esfuerzo estimado: {{effort}}\n- Impacto en el calendario: {{impact}}\n\n¿Me confirmas si quieres que sigamos adelante?\n\nUn saludo,\n{{signature}}'],
+      ['{{project}}\u00a0: demande de modification', 'Bonjour {{first_name}},\n\nMerci pour votre demande concernant {{change}}. Elle ne fait pas partie du périmètre actuel\u00a0; voici donc ce qu’elle implique\u00a0:\n\n- Charge estimée\u00a0: {{effort}}\n- Impact sur le planning\u00a0: {{impact}}\n\nPourriez-vous me confirmer si vous souhaitez que nous allions de l’avant\u00a0?\n\nBien cordialement,\n{{signature}}'],
+      ['{{project}}: richiesta di modifica', 'Buongiorno {{first_name}},\n\ngrazie per la richiesta relativa a {{change}}. Non rientra nel perimetro attuale, quindi Le riporto cosa comporta:\n\n- Impegno stimato: {{effort}}\n- Impatto sulla pianificazione: {{impact}}\n\nMi conferma se desidera procedere?\n\nCordiali saluti,\n{{signature}}']),
+    tpl('Follow-up', 'Follow-ups', 'Ask where something stands when you’re waiting on the client.',
+      ['{{project}}: following up', 'Hi {{first_name}},\n\nI’m following up on {{topic}}. Could you let me know where things stand when you have a moment?\n\nThanks,\n{{signature}}'],
+      ['{{project}}: seguimiento', 'Hola {{first_name}}:\n\nTe escribo para hacer seguimiento de {{topic}}. ¿Me puedes indicar cómo va cuando tengas un momento?\n\nGracias,\n{{signature}}'],
+      ['{{project}}\u00a0: suivi', 'Bonjour {{first_name}},\n\nJe reviens vers vous au sujet de {{topic}}. Pourriez-vous me dire où en sont les choses quand vous aurez un moment\u00a0?\n\nMerci,\n{{signature}}'],
+      ['{{project}}: aggiornamento', 'Buongiorno {{first_name}},\n\nLe scrivo per avere un aggiornamento su {{topic}}. Quando ha un momento, potrebbe dirmi a che punto siamo?\n\nGrazie,\n{{signature}}']),
+    tpl('Deadline reminder', 'Follow-ups', 'Remind the client of the deadline and what’s still missing.',
       ['{{project}}: deadline on {{deadline}}', 'Hi {{first_name}},\n\nA quick reminder that the deadline for {{project}} is {{deadline}}. To stay on track, we still need:\n\n{{pending}}\n\nThanks,\n{{signature}}'],
       ['{{project}}: fecha límite el {{deadline}}', 'Hola {{first_name}}:\n\nTe recuerdo que la fecha límite de {{project}} es el {{deadline}}. Para cumplirla, todavía necesitamos:\n\n{{pending}}\n\nGracias,\n{{signature}}'],
       ['{{project}}\u00a0: échéance le {{deadline}}', 'Bonjour {{first_name}},\n\nPetit rappel\u00a0: l’échéance de {{project}} est fixée au {{deadline}}. Pour la respecter, il nous manque encore\u00a0:\n\n{{pending}}\n\nMerci,\n{{signature}}'],
       ['{{project}}: scadenza il {{deadline}}', 'Buongiorno {{first_name}},\n\nle ricordo che la scadenza di {{project}} è il {{deadline}}. Per rispettarla, ci servono ancora:\n\n{{pending}}\n\nGrazie,\n{{signature}}']),
-    tpl('Ready for review',
+    tpl('Ready for review', 'Review and delivery', 'Ask the client to test something and send feedback by a date.',
       ['{{project}}: ready for your review', 'Hi {{first_name}},\n\n{{what}} is ready for you to review on {{db}}.\n\nCould you test it and send me your feedback by {{review_by}}?\n\nBest regards,\n{{signature}}'],
       ['{{project}}: listo para tu revisión', 'Hola {{first_name}}:\n\n{{what}} está listo para que lo revises en {{db}}.\n\n¿Puedes probarlo y enviarme tus comentarios antes del {{review_by}}?\n\nUn saludo,\n{{signature}}'],
       ['{{project}}\u00a0: prêt pour votre validation', 'Bonjour {{first_name}},\n\n{{what}} est prêt à être testé sur {{db}}.\n\nPourriez-vous le vérifier et m’envoyer vos retours d’ici le {{review_by}}\u00a0?\n\nBien cordialement,\n{{signature}}'],
-      ['{{project}}: pronto per la sua revisione', 'Buongiorno {{first_name}},\n\n{{what}} è pronto per essere verificato su {{db}}.\n\nPotrebbe provarlo e inviarmi il suo riscontro entro il {{review_by}}?\n\nCordiali saluti,\n{{signature}}'])
+      ['{{project}}: pronto per la sua revisione', 'Buongiorno {{first_name}},\n\n{{what}} è pronto per essere verificato su {{db}}.\n\nPotrebbe provarlo e inviarmi il suo riscontro entro il {{review_by}}?\n\nCordiali saluti,\n{{signature}}']),
+    tpl('Wrap-up', 'Closing', 'Close the project: what was delivered and how support works from now on.',
+      ['{{project}}: wrapping up', 'Hi {{first_name}},\n\n{{project}} is now live. Thank you for your trust and your help throughout the project.\n\nTo sum up:\n{{summary}}\n\nFrom now on, {{support}}\n\nIt’s been a pleasure working with you.\n\nBest regards,\n{{signature}}'],
+      ['{{project}}: cierre del proyecto', 'Hola {{first_name}}:\n\n{{project}} ya está en producción. Gracias por tu confianza y tu ayuda durante todo el proyecto.\n\nEn resumen:\n{{summary}}\n\nA partir de ahora, {{support}}\n\nHa sido un placer trabajar contigo.\n\nUn saludo,\n{{signature}}'],
+      ['{{project}}\u00a0: clôture du projet', 'Bonjour {{first_name}},\n\n{{project}} est désormais en production. Merci pour votre confiance et votre aide tout au long du projet.\n\nEn résumé\u00a0:\n{{summary}}\n\nDésormais, {{support}}\n\nCe fut un plaisir de travailler avec vous.\n\nBien cordialement,\n{{signature}}'],
+      ['{{project}}: chiusura del progetto', 'Buongiorno {{first_name}},\n\n{{project}} è ora in produzione. Grazie per la fiducia e per il supporto durante tutto il progetto.\n\nIn sintesi:\n{{summary}}\n\nDa ora in poi, {{support}}\n\nÈ stato un piacere lavorare insieme.\n\nCordiali saluti,\n{{signature}}']),
+    tpl('Thank you', 'Closing', 'A short thank-you for the client’s help or feedback.',
+      ['Thank you, {{first_name}}', 'Hi {{first_name}},\n\nThank you for {{reason}}. It really helped us move {{project}} forward.\n\nBest regards,\n{{signature}}'],
+      ['Gracias, {{first_name}}', 'Hola {{first_name}}:\n\nGracias por {{reason}}. Nos ha ayudado mucho a avanzar con {{project}}.\n\nUn saludo,\n{{signature}}'],
+      ['Merci, {{first_name}}', 'Bonjour {{first_name}},\n\nMerci pour {{reason}}. Cela nous a beaucoup aidés à faire avancer {{project}}.\n\nBien cordialement,\n{{signature}}'],
+      ['Grazie, {{first_name}}', 'Buongiorno {{first_name}},\n\ngrazie per {{reason}}. Ci è stato di grande aiuto per far avanzare {{project}}.\n\nCordiali saluti,\n{{signature}}'])
   ];
-
-  /* ---------- importing a version 0.1 backup ---------- */
-  function findArray(o, key, depth) {
-    if (!o || typeof o !== 'object' || depth > 4) return null;
-    if (Array.isArray(o[key])) return o[key];
-    for (const v of Object.values(o)) { const r = findArray(v, key, depth + 1); if (r) return r; }
-    return null;
-  }
-  const part = x => ({ subject: String((x && x.subject) || ''), body: String((x && x.body) || '') });
-  function importV01(data, newId) {
-    const templates = (findArray(data, 'templates', 0) || [])
-      .filter(t => t && typeof t === 'object' && t.name)
-      .map(t => ({ id: newId(), name: String(t.name), en: part(t.en), es: part(t.es), fr: part(t.fr), it: part(t.it) }))
-      .filter(t => ['en', 'es', 'fr', 'it'].some(l => t[l].subject || t[l].body));
-    const projects = (findArray(data, 'projects', 0) || [])
-      .filter(p => p && typeof p === 'object' && p.name)
-      .map(p => {
-        const fields = {};
-        const spoc = [p.contactName || p.contact, p.contactEmail || p.email].filter(Boolean).join(' ');
-        if (spoc) fields.spoc = String(spoc);
-        const notes = [p.client && `Client: ${p.client}`, p.code && `Code: ${p.code}`, p.notes].filter(Boolean).join('\n');
-        if (notes) fields.notes = String(notes);
-        return { id: newId(), name: String(p.name), archived: !!p.archived, lang: ['es', 'fr', 'it'].includes(p.lang) ? p.lang : 'en', fields, todos: [] };
-      });
-    return { templates, projects };
-  }
 
   /* ---------- languages ---------- */
   const LANGS = ['en', 'es', 'fr', 'it'];
@@ -727,7 +744,7 @@
     return [
       `Please review this ${isTemplate ? 'email template' : 'email'}, written in ${L}, before I send it to a client.`,
       `- Correct spelling, grammar and punctuation, and make it read naturally to a native ${L} speaker${lang === 'fr' ? ', including French spacing before : ; ? and !' : ''}.`,
-      '- Keep a professional, friendly tone. Keep the meaning, names, dates, links and anything in {{double braces}} exactly as they are.',
+      '- Keep a professional, friendly tone. Keep the meaning, names, dates, links and anything in {{double braces}} exactly as they are. Links are written [text](address): keep that form.',
       `- Reply with the corrected subject and ${isTemplate ? 'template' : 'email'} first, ready to copy, then a short list of what you changed and why.`,
       '', `Subject: ${subject}`, '', body
     ].join('\n');
@@ -839,6 +856,557 @@
     return page.blocks.filter(b => (b.text[lang] || '').trim()).map(b => `${b.label.trim() || kindOf(b.kind).label}\n${b.text[lang].trim()}`).join('\n\n') + '\n';
   }
 
+  /* ---------- links in emails ----------
+     Templates stay plain text. A link is written [text](address), where the address can be a web address,
+     an email address or a {{placeholder}}. Copying makes real links; plain text gets "text (address)". */
+  const LINK_RE = /\[([^\]\n]{1,300})\]\(\s*([^()\s]{1,2000}?)\s*\)/g;
+  const BARE_URL_RE = /\bhttps?:\/\/[^\s<>"]*[^\s<>".,;:!?)\]'’”]/gi;
+  function linkHref(u) {
+    u = String(u || '').trim();
+    if (/^(https?:\/\/|mailto:)\S+$/i.test(u)) return u;
+    if (/^[^\s@<>()]+@[^\s@<>()]+\.[a-z]{2,}$/i.test(u)) return `mailto:${u}`;
+    return linkOf(u);
+  }
+  // Splits text into plain parts and links, for previews and copies.
+  function linkParts(s) {
+    s = String(s || '');
+    const out = [];
+    let last = 0;
+    s.replace(LINK_RE, (m, text, url, off) => {
+      if (off > last) out.push({ text: s.slice(last, off) });
+      out.push({ link: true, label: text, url, raw: m });
+      last = off + m.length;
+      return m;
+    });
+    if (last < s.length) out.push({ text: s.slice(last) });
+    return out;
+  }
+  // The email as plain text: links become "text (address)", or the address alone when it is the text.
+  function plainMail(s) {
+    return linkParts(s).map(x => {
+      if (!x.link) return x.text;
+      const href = linkHref(x.url);
+      if (!href) return x.raw;
+      const shown = href.replace(/^mailto:/i, '');
+      return x.label.trim() === x.url.trim() || x.label.trim() === shown ? shown : `${x.label} (${shown})`;
+    }).join('');
+  }
+  const escHtml = t => String(t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  // The email as HTML for pasting into a mail app: links work, line breaks stay, no styles of its own.
+  function htmlMail(s) {
+    const text = t => escHtml(t).replace(BARE_URL_RE, u => `<a href="${u}">${u}</a>`);
+    const body = linkParts(s).map(x => {
+      if (!x.link) return text(x.text);
+      const href = linkHref(x.url);
+      return href ? `<a href="${escHtml(href)}">${escHtml(x.label)}</a>` : text(x.raw);
+    }).join('');
+    return `<div>${body.replace(/\r?\n/g, '<br>\n')}</div>`;
+  }
+  // The link around a caret position, for editing it: { start, end, label, url } or null.
+  function linkAt(s, pos) {
+    let hit = null;
+    String(s || '').replace(LINK_RE, (m, label, url, off) => {
+      if (!hit && pos >= off && pos <= off + m.length) hit = { start: off, end: off + m.length, label, url };
+      return m;
+    });
+    return hit;
+  }
+  const linkMarkup = (label, url) => `[${String(label).replace(/[[\]\n]/g, ' ').trim() || url}](${String(url).trim()})`;
+
+  /* ---------- ordering ---------- */
+  // Moves the item with id before or after the item with toId. Returns false when nothing moved.
+  function moveById(list, id, toId, after) {
+    const from = list.findIndex(x => x.id === id);
+    if (from < 0 || id === toId) return false;
+    const [item] = list.splice(from, 1);
+    let at = list.findIndex(x => x.id === toId);
+    if (at < 0) { list.splice(from, 0, item); return false; }
+    if (after) at++;
+    list.splice(at, 0, item);
+    return at !== from;
+  }
+  // Projects: open ones first, in the user's order, then archived ones. The number is the position.
+  function renumberProjects(projects) {
+    const open = projects.filter(p => !p.archived), arch = projects.filter(p => p.archived);
+    projects.splice(0, projects.length, ...open, ...arch);
+    projects.forEach((p, i) => { p.num = i + 1; });
+    return projects;
+  }
+  // Moves a project to a 1-based position among the open projects.
+  function moveProjectTo(projects, id, pos) {
+    renumberProjects(projects);
+    const open = projects.filter(p => !p.archived);
+    const p = open.find(x => x.id === id);
+    if (!p) return false;
+    pos = Math.max(1, Math.min(open.length, Math.round(pos) || 1));
+    const rest = open.filter(x => x !== p);
+    rest.splice(pos - 1, 0, p);
+    projects.splice(0, open.length, ...rest);
+    renumberProjects(projects);
+    return true;
+  }
+  // Templates: the array order is the order within each category; cat is a category id or ''.
+  // Dropping on a template puts it next to that one, in its category; dropping on a category puts it first there.
+  function moveTemplate(templates, id, target, after) {
+    const t = templates.find(x => x.id === id);
+    if (!t) return false;
+    if (target.tpl) {
+      const to = templates.find(x => x.id === target.tpl);
+      if (!to || to === t) return false;
+      t.cat = to.cat || '';
+      return moveById(templates, id, to.id, after) || true;
+    }
+    const cat = target.cat || '';
+    t.cat = cat;
+    templates.splice(templates.indexOf(t), 1);
+    const first = templates.findIndex(x => (x.cat || '') === cat);
+    templates.splice(first < 0 ? templates.length : first, 0, t);
+    return true;
+  }
+
+  /* ---------- calendars (iCalendar files and secret addresses) ---------- */
+  const WINDOWS_ZONES = {
+    'romance standard time': 'Europe/Paris', 'w. europe standard time': 'Europe/Berlin', 'central europe standard time': 'Europe/Budapest',
+    'central european standard time': 'Europe/Warsaw', 'gmt standard time': 'Europe/London', 'greenwich standard time': 'Atlantic/Reykjavik',
+    'e. europe standard time': 'Europe/Chisinau', 'fle standard time': 'Europe/Kiev', 'gtb standard time': 'Europe/Bucharest',
+    'russian standard time': 'Europe/Moscow', 'utc': 'UTC', 'coordinated universal time': 'UTC',
+    'eastern standard time': 'America/New_York', 'central standard time': 'America/Chicago', 'mountain standard time': 'America/Denver',
+    'pacific standard time': 'America/Los_Angeles', 'sa pacific standard time': 'America/Bogota', 'argentina standard time': 'America/Buenos_Aires',
+    'e. south america standard time': 'America/Sao_Paulo', 'central standard time (mexico)': 'America/Mexico_City',
+    'pacific sa standard time': 'America/Santiago', 'canary standard time': 'Atlantic/Canary', 'morocco standard time': 'Africa/Casablanca',
+    'india standard time': 'Asia/Kolkata', 'china standard time': 'Asia/Shanghai', 'tokyo standard time': 'Asia/Tokyo',
+    'singapore standard time': 'Asia/Singapore', 'arabian standard time': 'Asia/Dubai', 'aus eastern standard time': 'Australia/Sydney'
+  };
+  const zoneOk = new Map();
+  function ianaZone(name) {
+    if (!name) return null;
+    if (zoneOk.has(name)) return zoneOk.get(name);
+    let ok = null;
+    try { new Intl.DateTimeFormat('en-US', { timeZone: name }); ok = name; } catch {}
+    zoneOk.set(name, ok);
+    return ok;
+  }
+  const zoneFmt = new Map();
+  // Minutes east of UTC for a zone at an instant.
+  function zoneOffset(ms, zone) {
+    let f = zoneFmt.get(zone);
+    if (!f) {
+      f = new Intl.DateTimeFormat('en-US', { timeZone: zone, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric' });
+      zoneFmt.set(zone, f);
+    }
+    const v = {};
+    for (const p of f.formatToParts(new Date(ms))) v[p.type] = Number(p.value);
+    return Math.round((Date.UTC(v.year, v.month - 1, v.day, v.hour % 24, v.minute, v.second) - Math.floor(ms / 1000) * 1000) / 60000);
+  }
+  const wallUtc = w => Date.UTC(w.y, w.mo - 1, w.d, w.h || 0, w.mi || 0, w.s || 0);
+  // A clock time in a zone, as an instant.
+  function zonedMs(w, zone) {
+    const guess = wallUtc(w);
+    let ms = guess - zoneOffset(guess, zone) * 60000;
+    const again = guess - zoneOffset(ms, zone) * 60000;
+    if (again !== ms) ms = again;
+    return ms;
+  }
+  const nthWeekday = (y, mo, n, wd) => {
+    if (n > 0) { const first = new Date(Date.UTC(y, mo - 1, 1)).getUTCDay(); return 1 + ((wd - first + 7) % 7) + (n - 1) * 7; }
+    const days = new Date(Date.UTC(y, mo, 0)).getUTCDate();
+    const lastWd = new Date(Date.UTC(y, mo - 1, days)).getUTCDay();
+    return days - ((lastWd - wd + 7) % 7) + (n + 1) * 7;
+  };
+  const WD = { SU: 0, MO: 1, TU: 2, WE: 3, TH: 4, FR: 5, SA: 6 };
+  // Offset (minutes east) from a VTIMEZONE's STANDARD and DAYLIGHT rules, for zones Intl doesn't know.
+  function vtzOffset(rules, w) {
+    const at = wallUtc(w);
+    let best = null;
+    for (const r of rules) {
+      const cands = [];
+      if (r.month && r.byday) {
+        for (const y of [w.y - 1, w.y]) cands.push(Date.UTC(y, r.month - 1, nthWeekday(y, r.month, r.byday.n || 1, r.byday.wd), r.start.h, r.start.mi));
+      } else cands.push(wallUtc(r.start));
+      for (const c of cands) if (c <= at && (!best || c > best.at)) best = { at: c, to: r.to };
+    }
+    if (best) return best.to;
+    return rules.length ? rules[0].to : 0;
+  }
+  function zoneOf(tzid, vtz) {
+    if (tzid === 'Z') return { kind: 'utc' };
+    if (!tzid) return { kind: 'local' };
+    const clean = tzid.replace(/^"|"$/g, '').replace(/^\/[^/]+\/[^/]+\//, '').trim();
+    const iana = ianaZone(clean) || ianaZone(WINDOWS_ZONES[clean.toLowerCase()]);
+    if (iana) return { kind: 'iana', zone: iana };
+    if (vtz && vtz[tzid] && vtz[tzid].length) return { kind: 'vtz', rules: vtz[tzid] };
+    return { kind: 'local' };
+  }
+  function wallMs(w, z) {
+    if (z.kind === 'utc') return wallUtc(w);
+    if (z.kind === 'iana') return zonedMs(w, z.zone);
+    if (z.kind === 'vtz') return wallUtc(w) - vtzOffset(z.rules, w) * 60000;
+    return new Date(w.y, w.mo - 1, w.d, w.h || 0, w.mi || 0, w.s || 0).getTime();
+  }
+
+  const unfoldIcs = t => String(t || '').replace(/\r\n?/g, '\n').replace(/\n[ \t]/g, '');
+  const unescIcs = v => String(v || '').replace(/\\([nN\\;,])/g, (m, c) => (c === 'n' || c === 'N' ? '\n' : c));
+  function icsLine(line) {
+    let i = 0, q = false;
+    for (; i < line.length; i++) { const c = line[i]; if (c === '"') q = !q; else if (c === ':' && !q) break; }
+    const head = line.slice(0, i), value = line.slice(i + 1);
+    const parts = head.split(/;(?=(?:[^"]*"[^"]*")*[^"]*$)/);
+    const params = {};
+    for (const p of parts.slice(1)) { const k = p.indexOf('='); if (k > 0) params[p.slice(0, k).toUpperCase()] = p.slice(k + 1).replace(/^"|"$/g, ''); }
+    return { name: parts[0].toUpperCase(), params, value };
+  }
+  // "20261104T100000Z", "20261104T100000" or "20261104" -> { y, mo, d, h, mi, s, utc, date }.
+  function icsWall(v) {
+    const m = /^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})?(Z)?)?$/.exec(String(v || '').trim());
+    if (!m) return null;
+    return { y: +m[1], mo: +m[2], d: +m[3], h: +(m[4] || 0), mi: +(m[5] || 0), s: +(m[6] || 0), utc: !!m[7], date: !m[4] };
+  }
+  function icsDuration(v) {
+    const m = /^([+-])?P(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/.exec(String(v || '').trim());
+    if (!m) return null;
+    const min = (+(m[2] || 0)) * 10080 + (+(m[3] || 0)) * 1440 + (+(m[4] || 0)) * 60 + (+(m[5] || 0)) + Math.round((+(m[6] || 0)) / 60);
+    return m[1] === '-' ? -min : min;
+  }
+  function parseRrule(v) {
+    const r = {};
+    for (const part of String(v || '').split(';')) {
+      const [k, x] = part.split('=');
+      if (!k || x === undefined) continue;
+      r[k.toUpperCase()] = x;
+    }
+    if (!['DAILY', 'WEEKLY', 'MONTHLY', 'YEARLY'].includes(r.FREQ)) return null;
+    const list = x => (x ? x.split(',').map(s => s.trim()).filter(Boolean) : []);
+    return {
+      freq: r.FREQ, interval: Math.max(1, parseInt(r.INTERVAL, 10) || 1),
+      count: r.COUNT ? parseInt(r.COUNT, 10) : 0, until: r.UNTIL || '',
+      byday: list(r.BYDAY).map(d => { const m = /^([+-]?\d{1,2})?(SU|MO|TU|WE|TH|FR|SA)$/i.exec(d); return m ? { n: m[1] ? +m[1] : 0, wd: WD[m[2].toUpperCase()] } : null; }).filter(Boolean),
+      bymonthday: list(r.BYMONTHDAY).map(Number).filter(n => n && Math.abs(n) <= 31),
+      bymonth: list(r.BYMONTH).map(Number).filter(n => n >= 1 && n <= 12),
+      bysetpos: list(r.BYSETPOS).map(Number).filter(Boolean)
+    };
+  }
+  const pad4 = n => String(n).padStart(4, '0');
+  const wallKey = w => `${pad4(w.y)}${pad(w.mo)}${pad(w.d)}${w.date ? '' : `T${pad(w.h)}${pad(w.mi)}${pad(w.s)}`}`;
+  const keyWall = k => icsWall(k);
+  const ymdOf = w => `${pad4(w.y)}-${pad(w.mo)}-${pad(w.d)}`;
+
+  // Reads an iCalendar file into a calendar: its name, its time zones and its events, ready to store.
+  // Events that ended before `since` (a Date) are dropped, so years of history don't weigh on the data file.
+  function parseIcs(text, since) {
+    const lines = unfoldIcs(text).split('\n');
+    const vtz = {};
+    const events = [];
+    let name = '', ev = null, tz = null, comp = null, depth = [];
+    const sinceMs = since ? since.getTime() : -Infinity;
+    for (const raw of lines) {
+      if (!raw.trim()) continue;
+      const { name: n, params, value } = icsLine(raw);
+      if (n === 'BEGIN') {
+        const what = value.trim().toUpperCase();
+        depth.push(what);
+        if (what === 'VEVENT') ev = { p: {}, ex: [] };
+        else if (what === 'VTIMEZONE') tz = { id: '', rules: [] };
+        else if (tz && (what === 'STANDARD' || what === 'DAYLIGHT')) comp = {};
+        continue;
+      }
+      if (n === 'END') {
+        const what = value.trim().toUpperCase();
+        depth.pop();
+        if (what === 'VEVENT' && ev) { events.push(ev); ev = null; }
+        else if (what === 'VTIMEZONE' && tz) { if (tz.id) vtz[tz.id] = tz.rules; tz = null; }
+        else if ((what === 'STANDARD' || what === 'DAYLIGHT') && tz && comp) {
+          const to = /^([+-])(\d{2})(\d{2})/.exec(comp.to || '');
+          const start = icsWall(comp.start) || { y: 1970, mo: 1, d: 1, h: 0, mi: 0, s: 0 };
+          const rr = parseRrule(comp.rrule || '');
+          if (to) tz.rules.push({
+            to: (to[1] === '-' ? -1 : 1) * (+to[2] * 60 + +to[3]), start,
+            month: rr && rr.bymonth[0], byday: rr && rr.byday[0]
+          });
+          comp = null;
+        }
+        continue;
+      }
+      if (ev && depth[depth.length - 1] === 'VEVENT') {
+        if (n === 'EXDATE') { for (const v of value.split(',')) ev.ex.push({ v, tz: params.TZID || '' }); continue; }
+        if (!ev.p[n]) ev.p[n] = { value, params };
+      } else if (comp) {
+        if (n === 'TZOFFSETTO') comp.to = value.trim();
+        else if (n === 'DTSTART') comp.start = value.trim();
+        else if (n === 'RRULE') comp.rrule = value.trim();
+      } else if (tz && n === 'TZID') tz.id = value.trim();
+      else if (!depth.includes('VEVENT') && n === 'X-WR-CALNAME') name = unescIcs(value).trim();
+    }
+    const out = [];
+    for (const e of events) {
+      const P = e.p;
+      if (!P.DTSTART) continue;
+      const sw = icsWall(P.DTSTART.value);
+      if (!sw) continue;
+      const allDay = sw.date || (P.DTSTART.params.VALUE || '').toUpperCase() === 'DATE';
+      const z = allDay ? '' : sw.utc ? 'Z' : (P.DTSTART.params.TZID || '');
+      const zone = zoneOf(z, vtz);
+      let dur = null;
+      if (P.DTEND) {
+        const ew = icsWall(P.DTEND.value);
+        if (ew) {
+          if (allDay) dur = Math.round((wallUtc({ ...ew, h: 0, mi: 0, s: 0 }) - wallUtc({ ...sw, h: 0, mi: 0, s: 0 })) / 60000);
+          else dur = Math.round((wallMs(ew, zoneOf(ew.utc ? 'Z' : (P.DTEND.params.TZID || z), vtz)) - wallMs(sw, zone)) / 60000);
+        }
+      } else if (P.DURATION) dur = icsDuration(P.DURATION.value);
+      if (dur === null || dur < 0) dur = allDay ? 1440 : 0;
+      const rr = P.RRULE ? P.RRULE.value.trim() : '';
+      const rule = rr ? parseRrule(rr) : null;
+      const instantOf = (v, tzid) => {
+        const w = icsWall(v);
+        if (!w) return null;
+        if (allDay || w.date) return ymdOf(w);
+        return wallMs(w, zoneOf(w.utc ? 'Z' : (tzid || z), vtz));
+      };
+      // Skip what ended long ago: single events before `since`, and series whose UNTIL is before it.
+      if (!rule) {
+        const startMs = allDay ? wallUtc(sw) : wallMs(sw, zone);
+        if (startMs + dur * 60000 < sinceMs && !P['RECURRENCE-ID']) continue;
+      } else if (rule.until) {
+        const u = icsWall(rule.until);
+        if (u && (u.utc ? wallUtc(u) : wallMs(u, zone)) < sinceMs) continue;
+      }
+      const d = {
+        u: P.UID ? P.UID.value.trim() : `${wallKey(sw)}-${out.length}`,
+        t: unescIcs(P.SUMMARY ? P.SUMMARY.value : '').trim(),
+        s: wallKey(sw), z, dur
+      };
+      const loc = unescIcs(P.LOCATION ? P.LOCATION.value : '').trim();
+      if (loc) d.l = loc.slice(0, 300);
+      if (rule) d.r = rr;
+      if (P['RECURRENCE-ID']) d.rid = instantOf(P['RECURRENCE-ID'].value, P['RECURRENCE-ID'].params.TZID);
+      if (e.ex.length) d.x = e.ex.map(x => instantOf(x.v.trim(), x.tz)).filter(x => x !== null);
+      if (P.STATUS && P.STATUS.value.trim().toUpperCase() === 'CANCELLED') d.c = 1;
+      if (P.TRANSP && P.TRANSP.value.trim().toUpperCase() === 'TRANSPARENT') d.f = 1;
+      out.push(d);
+    }
+    return { name, tz: vtz, events: out };
+  }
+
+  const dayNum = w => Math.floor(Date.UTC(w.y, w.mo - 1, w.d) / 864e5);
+  const fromDayNum = n => { const d = new Date(n * 864e5); return { y: d.getUTCFullYear(), mo: d.getUTCMonth() + 1, d: d.getUTCDate() }; };
+  const monthDays = (y, mo) => new Date(Date.UTC(y, mo, 0)).getUTCDate();
+  // The days of one period of a rule (a day, a week, a month, a year), sorted, as day numbers.
+  function periodDays(rule, start, k) {
+    const sd = dayNum(start);
+    if (rule.freq === 'DAILY') return [sd + k * rule.interval];
+    if (rule.freq === 'WEEKLY') {
+      const monday = sd - ((new Date(sd * 864e5).getUTCDay() + 6) % 7) + k * 7 * rule.interval;
+      const wds = rule.byday.length ? rule.byday.map(b => b.wd) : [new Date(sd * 864e5).getUTCDay()];
+      return [...new Set(wds)].map(wd => monday + ((wd + 6) % 7)).sort((a, b) => a - b);
+    }
+    const monthList = (y, mo) => {
+      const n = monthDays(y, mo);
+      let days = [];
+      if (rule.byday.length) {
+        for (const b of rule.byday) {
+          if (b.n) { const d = nthWeekday(y, mo, b.n, b.wd); if (d >= 1 && d <= n) days.push(d); }
+          else for (let d = 1; d <= n; d++) if (new Date(Date.UTC(y, mo - 1, d)).getUTCDay() === b.wd) days.push(d);
+        }
+        if (rule.bymonthday.length) days = days.filter(d => rule.bymonthday.some(x => (x > 0 ? x : n + 1 + x) === d));
+      } else if (rule.bymonthday.length) days = rule.bymonthday.map(x => (x > 0 ? x : n + 1 + x)).filter(d => d >= 1 && d <= n);
+      else if (start.d <= n) days = [start.d];
+      days = [...new Set(days)].sort((a, b) => a - b);
+      if (rule.bysetpos.length) days = rule.bysetpos.map(p => days[p > 0 ? p - 1 : days.length + p]).filter(Boolean);
+      return days.map(d => dayNum({ y, mo, d }));
+    };
+    if (rule.freq === 'MONTHLY') {
+      const idx = start.y * 12 + (start.mo - 1) + k * rule.interval;
+      return monthList(Math.floor(idx / 12), (idx % 12) + 1);
+    }
+    const y = start.y + k * rule.interval;
+    const months = rule.bymonth.length ? rule.bymonth : [start.mo];
+    let out = [];
+    for (const mo of months) {
+      if (!rule.byday.length && !rule.bymonthday.length) { if (start.d <= monthDays(y, mo)) out.push(dayNum({ y, mo, d: start.d })); }
+      else out = out.concat(monthList(y, mo));
+    }
+    return out.sort((a, b) => a - b);
+  }
+
+  // Occurrences of a stored calendar overlapping [from, to), two local dates as YYYY-MM-DD (to exclusive).
+  function expandCalendar(cal, from, to) {
+    const fromMs = parseYmd(from).getTime(), toMs = parseYmd(to).getTime();
+    const fromDay = dayNum(icsWall(from.replace(/-/g, ''))), toDay = dayNum(icsWall(to.replace(/-/g, '')));
+    const vtz = cal.tz || {};
+    const overrides = new Map();
+    for (const e of cal.events || []) if (e.rid !== undefined) {
+      if (!overrides.has(e.u)) overrides.set(e.u, new Set());
+      overrides.get(e.u).add(e.rid);
+    }
+    const out = [];
+    const push = (e, w, zone) => {
+      if (e.c) return;
+      const allDay = !!w.date || e.s.length === 8;
+      if (allDay) {
+        const s = dayNum(w), n = Math.max(1, Math.round(e.dur / 1440));
+        if (s >= toDay || s + n <= fromDay) return;
+        out.push({ id: `${cal.id}:${e.u}:${wallKey(w)}`, cal: cal.id, title: e.t, loc: e.l || '', allDay: true, sd: ymdOf(w), ed: ymdOf({ ...fromDayNum(s + n), date: true }), busy: false });
+        return;
+      }
+      const start = wallMs(w, zone), end = start + e.dur * 60000;
+      if (start >= toMs || (end <= fromMs && !(e.dur === 0 && start >= fromMs))) return;
+      out.push({ id: `${cal.id}:${e.u}:${start}`, cal: cal.id, title: e.t, loc: e.l || '', allDay: false, start, end, busy: !e.f });
+    };
+    for (const e of cal.events || []) {
+      const sw = keyWall(e.s);
+      if (!sw) continue;
+      const allDay = e.s.length === 8;
+      const zone = allDay ? { kind: 'local' } : zoneOf(e.z, vtz);
+      const rule = e.r ? parseRrule(e.r) : null;
+      if (!rule || e.rid !== undefined) { push(e, sw, zone); continue; }
+      const skip = new Set((e.x || []).map(String));
+      const moved = overrides.get(e.u) || new Set();
+      for (const x of moved) skip.add(String(x));
+      const untilW = rule.until ? icsWall(rule.until) : null;
+      const untilMs = untilW ? (untilW.date ? wallUtc(untilW) + 864e5 - 1 : untilW.utc ? wallUtc(untilW) : wallMs(untilW, zone)) : Infinity;
+      const startDay = dayNum(sw);
+      const spanDays = Math.ceil(e.dur / 1440) + 1;
+      // Without a COUNT, jump close to the window instead of walking from the first occurrence.
+      let k = 0;
+      if (!rule.count) {
+        const per = rule.freq === 'DAILY' ? rule.interval : rule.freq === 'WEEKLY' ? 7 * rule.interval : rule.freq === 'MONTHLY' ? 31 * rule.interval : 366 * rule.interval;
+        k = Math.max(0, Math.floor((fromDay - spanDays - startDay) / per) - 2);
+      }
+      let n = 0, guard = 0;
+      outer:
+      for (; guard < 5000; k++, guard++) {
+        const days = periodDays(rule, sw, k);
+        if (!days.length) { if (rule.freq === 'DAILY' || rule.freq === 'WEEKLY') break; continue; }
+        if (days[0] > toDay + 1 && !rule.count) break;
+        for (const dn of days) {
+          if (dn < startDay) continue;
+          const dd = fromDayNum(dn);
+          const w = { ...sw, y: dd.y, mo: dd.mo, d: dd.d };
+          const key = allDay ? ymdOf(w) : wallMs(w, zone);
+          if (key > untilMs && !allDay) break outer;
+          if (allDay && wallUtc(w) > untilMs) break outer;
+          n++;
+          if (rule.count && n > rule.count) break outer;
+          if (dn > toDay + 1) { if (rule.count) break outer; continue; }
+          if (dn < fromDay - spanDays) continue;
+          if (skip.has(String(key))) continue;
+          push(e, w, zone);
+        }
+      }
+    }
+    return out.sort((a, b) => (a.allDay !== b.allDay ? (a.allDay ? -1 : 1) : a.allDay ? a.title.localeCompare(b.title) : a.start - b.start || a.end - b.end));
+  }
+
+  // The occurrences on one local date: all-day ones covering it and timed ones overlapping it.
+  function eventsOn(occs, date) {
+    const a = parseYmd(date).getTime(), b = parseYmd(addDays(date, 1)).getTime();
+    return occs.filter(o => (o.allDay ? o.sd <= date && date < o.ed : o.start < b && (o.end > a || (o.start >= a && o.end === o.start))));
+  }
+  // Busy minutes on a date between two clock times (minutes after midnight), overlaps counted once.
+  function busyMinutes(occs, date, fromMin, toMin) {
+    const day = parseYmd(date).getTime();
+    const spans = occs.filter(o => !o.allDay && o.busy)
+      .map(o => [Math.max(fromMin, (o.start - day) / 60000), Math.min(toMin, (o.end - day) / 60000)])
+      .filter(([x, y]) => y > x).sort((p, q) => p[0] - q[0]);
+    let total = 0, cur = null;
+    for (const s of spans) {
+      if (!cur || s[0] > cur[1]) { if (cur) total += cur[1] - cur[0]; cur = s.slice(); }
+      else cur[1] = Math.max(cur[1], s[1]);
+    }
+    if (cur) total += cur[1] - cur[0];
+    return Math.round(total);
+  }
+  const hm = ms => { const d = new Date(ms); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+  // "10:00–11:00", or "until 11:00" / "from 22:00" for events that cross midnight.
+  function eventTime(o, date) {
+    if (o.allDay) return 'All day';
+    const a = parseYmd(date).getTime(), b = parseYmd(addDays(date, 1)).getTime();
+    if (o.start < a && o.end > b) return 'All day';
+    if (o.start < a) return `Until ${hm(o.end)}`;
+    if (o.end > b) return `From ${hm(o.start)}`;
+    return o.end > o.start ? `${hm(o.start)}–${hm(o.end)}` : hm(o.start);
+  }
+  // A meeting link in the location or title (Google Meet, Teams, Zoom or any web address).
+  function eventLink(o) {
+    const m = /https?:\/\/[^\s<>"]+/i.exec(`${o.loc || ''} ${o.title || ''}`);
+    return m ? m[0].replace(/[.,;)]+$/, '') : '';
+  }
+
+  /* ---------- your own meetings, typed like tasks ---------- */
+  // A clock time: 10:00, 9.30, 10h30, 2pm, 2:30pm. Returns minutes after midnight, or null.
+  const CLOCK = '(\\d{1,2})(?:[:.h](\\d{2}))?\\s?(am|pm|a\\.m\\.|p\\.m\\.)?';
+  function clockMin(h, m, ap) {
+    h = Number(h); m = Number(m || 0);
+    if (ap) { const pm = /^p/i.test(ap); if (h < 1 || h > 12) return null; h = (h % 12) + (pm ? 12 : 0); }
+    return h <= 23 && m <= 59 ? h * 60 + m : null;
+  }
+  const hhmm = min => `${pad(Math.floor(min / 60) % 24)}:${pad(min % 60)}`;
+  // "10:00 Partena kick-off", "10:00–11:30 Steering", "14:30 1h Call Mayra" -> { start, end, title } in minutes.
+  // A time needs minutes or am/pm, so "2 meetings" or "15m FU" isn't read as a time. No length means 30 minutes.
+  function parseMeeting(text, fallbackLen) {
+    const s = String(text || '');
+    const re = new RegExp(`^\\s*${CLOCK}(?:\\s*(?:[-–—]|to|a|à)\\s*${CLOCK})?(?=\\s|$)`, 'i');
+    const m = re.exec(s);
+    if (!m || (!m[2] && !m[3])) return null;
+    const start = clockMin(m[1], m[2], m[3]);
+    if (start === null) return null;
+    let end = null;
+    if (m[4] !== undefined) {
+      end = clockMin(m[4], m[5], m[6] || m[3] || null);
+      if (end === null) return null;
+      // "11:00-1" means one in the afternoon.
+      if (end <= start && !m[6] && !m[3] && end < 720 && end + 720 > start) end += 720;
+      if (end <= start) return null;
+    }
+    let rest = s.slice(m[0].length);
+    if (end === null) {
+      const d = new RegExp(`^\\s*${DUR_SRC.replace('(^|[^\\\\p{L}\\\\p{N}])', '()')}`, 'iu').exec(rest);
+      const len = d ? duration(d[0]) : 0;
+      if (len) rest = rest.slice(d[0].length);
+      end = Math.min(24 * 60, start + (len || fallbackLen || 30));
+    }
+    return { start: hhmm(start), end: end >= 24 * 60 ? '24:00' : hhmm(end), title: rest.replace(/^\s*[-–—:,]?\s*/, '').trim() };
+  }
+  // Just the times, as typed in a meeting's time field: "10:00", "10:00–11:00", "10:00 1h".
+  function parseMeetingTime(text, oldLen) {
+    const x = parseMeeting(`${text} x`, oldLen);
+    return x && x.title === 'x' ? { start: x.start, end: x.end } : null;
+  }
+  const meetingLabel = m => `${m.start}–${m.end}`;
+
+  /* ---------- zip files, for Google Calendar's export ---------- */
+  // The files in a zip whose names end in one of exts, as [{ name, bytes }]. Inflating needs DecompressionStream.
+  async function unzip(buf, exts) {
+    const v = new DataView(buf);
+    let eocd = -1;
+    for (let i = buf.byteLength - 22; i >= Math.max(0, buf.byteLength - 66000); i--) if (v.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+    if (eocd < 0) throw new Error('not a zip');
+    const count = v.getUint16(eocd + 10, true);
+    let p = v.getUint32(eocd + 16, true);
+    const out = [];
+    for (let k = 0; k < count; k++) {
+      if (v.getUint32(p, true) !== 0x02014b50) break;
+      const method = v.getUint16(p + 10, true), size = v.getUint32(p + 20, true);
+      const nameLen = v.getUint16(p + 28, true), extraLen = v.getUint16(p + 30, true), commentLen = v.getUint16(p + 32, true);
+      const local = v.getUint32(p + 42, true);
+      const name = new TextDecoder().decode(new Uint8Array(buf, p + 46, nameLen));
+      p += 46 + nameLen + extraLen + commentLen;
+      const base = name.split('/').pop();
+      if (!base || base.startsWith('.') || !exts.some(e => base.toLowerCase().endsWith(e))) continue;
+      const start = local + 30 + v.getUint16(local + 26, true) + v.getUint16(local + 28, true);
+      const raw = new Uint8Array(buf, start, size);
+      let bytes;
+      if (method === 0) bytes = raw;
+      else if (method === 8) {
+        if (typeof DecompressionStream === 'undefined') throw new Error('no inflate');
+        const stream = new Blob([raw]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+        bytes = new Uint8Array(await new Response(stream).arrayBuffer());
+      } else continue;
+      out.push({ name: base, bytes });
+    }
+    return out;
+  }
+
   root.Core = {
     pad, isDate, ymd, parseYmd, addDays, mondayOf, fmtLong, fmtShort, fmtDots, fmtRange,
     duration, stripDuration, fmtDur, toMin, isTime,
@@ -848,11 +1416,15 @@
     PROJECT_FIELDS, emailIn, emailsIn, firstLine, nameIn, linkOf,
     DEFAULT_SCHEDULE, nextNumber, scheduleFrom, nextPhase, duplicateProject, findProjects, daysBetween, dueLabel,
     placeholders, fill, fillParts, isoWeek, AUTO_KEYS, autoValues, isLongBlank, humanize, mailto,
-    STARTER_TEMPLATES, importV01,
+    STARTER_TEMPLATES, TEMPLATE_CATEGORIES,
     LANGS, LANG_NAMES, langName, parseLanguages, fold,
     parseProjectMarkdown, projectToMarkdown, fileNameFor, findDate,
     ASSISTANTS, assistantLink, reviewPrompt,
     COPY_KINDS, kindOf, DEFAULT_BLOCKS, BRIEF_FIELDS, newBlock, newPage, sitemapPages,
-    pagePrompt, parseCopyAnswer, applyCopyAnswer, copyDeckMarkdown, pageAsText
+    pagePrompt, parseCopyAnswer, applyCopyAnswer, copyDeckMarkdown, pageAsText,
+    linkHref, linkParts, plainMail, htmlMail, linkAt, linkMarkup,
+    moveById, renumberProjects, moveProjectTo, moveTemplate,
+    parseIcs, expandCalendar, eventsOn, busyMinutes, eventTime, eventLink, zonedMs,
+    parseMeeting, parseMeetingTime, meetingLabel, unzip
   };
 })(globalThis);
