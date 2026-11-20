@@ -57,8 +57,8 @@
       </div>
       <div class="ribbon" id="ribbon" aria-hidden="true"></div>
       <div class="frame">
-        <label>Begin <input type="time" id="begin"></label>
-        <label>End <input type="time" id="end"></label>
+        <label>Begin <input class="clock" id="begin" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="Begin"></label>
+        <label>End <input class="clock" id="end" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="End"></label>
         <span class="meet-total" id="meetTotal"></span>
         <span class="done-total" id="doneTotal"></span>
       </div>
@@ -87,6 +87,7 @@
     <section class="block tasks" aria-labelledby="h-tasks">
       <div class="block-head">
         <h2 id="h-tasks">Tasks</h2>
+        <span class="range" id="tasksTotal" aria-live="polite"></span>
       </div>
       <div id="tasksBanner"></div>
       <div class="outline" id="tasks"></div>
@@ -108,7 +109,7 @@
           <button type="button" class="link" data-act="project-mail">Write an email</button>
           <button type="button" class="link" data-act="project-duplicate">Duplicate</button>
           <button type="button" class="link" data-act="project-export">Export</button>
-          <button type="button" class="link" data-act="project-archive" id="archBtn">Archive</button>
+          <button type="button" class="link" data-act="project-archive" id="archBtn">Mark as done</button>
           <button type="button" class="link danger" data-act="project-delete">Delete</button>
         </div>
         <div class="ptitle-row">
@@ -191,6 +192,10 @@
       </footer>
     </form>
   </dialog>
+  <div class="picker colorpop" id="colorPop" role="dialog" aria-labelledby="colorPopHead" hidden>
+    <p class="pick-head" id="colorPopHead"></p>
+    <div class="swatches" id="colorPopList"></div>
+  </div>
   <div class="picker suggest" id="suggest" hidden>
     <p class="pick-head" id="suggestHead"></p>
     <div class="pick-list" id="suggestList" role="listbox" aria-labelledby="suggestHead"></div>
@@ -253,10 +258,21 @@
         </label>
       </section>
       <section>
+        <h3>Time format</h3>
+        <label class="ef">Show times as
+          <select id="timeFormat">
+            <option value="system">Like my Mac</option>
+            <option value="24">24-hour (18:30)</option>
+            <option value="12">12-hour (6:30 PM)</option>
+          </select>
+        </label>
+        <p class="hint">You can type a time either way, like 18:30, 6:30pm or 18.30.</p>
+      </section>
+      <section>
         <h3>Working hours for new days</h3>
         <div class="pair">
-          <label>Begin <input type="time" id="defBegin"></label>
-          <label>End <input type="time" id="defEnd"></label>
+          <label>Begin <input class="clock" id="defBegin" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></label>
+          <label>End <input class="clock" id="defEnd" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></label>
         </div>
       </section>
       <section>

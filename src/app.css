@@ -14,6 +14,14 @@
   --brick-wash: #f6ddd6;
   --focus: #3d7a50;
   --sky: #3a6ea5;
+  --g-teal: #1f8a83; --g-teal-wash: #d6efec;
+  --g-blue: #4258c4; --g-blue-wash: #e0e4f7;
+  --g-violet: #8a4fbf; --g-violet-wash: #ece0f6;
+  --g-pink: #c2457f; --g-pink-wash: #f7dfea;
+  --g-orange: #c9671c; --g-orange-wash: #f8e4d3;
+  --g-amber: #a88200; --g-amber-wash: #f3ebcc;
+  --g-olive: #6c7d1f; --g-olive-wash: #e8edd2;
+  --g-slate: #5c6b7a; --g-slate-wash: #e3e7eb;
 
   --ui: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --num: ui-rounded, "SF Pro Rounded", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
@@ -36,6 +44,14 @@
     --brick-wash: #43291f;
     --focus: #84b993;
     --sky: #7fa7d6;
+    --g-teal: #4fc2b8; --g-teal-wash: #183a37;
+    --g-blue: #8a9cf0; --g-blue-wash: #232a4a;
+    --g-violet: #bd8ee8; --g-violet-wash: #33254a;
+    --g-pink: #ec8cba; --g-pink-wash: #43233a;
+    --g-orange: #f0a067; --g-orange-wash: #45301f;
+    --g-amber: #e3c25a; --g-amber-wash: #3f3519;
+    --g-olive: #b5c76a; --g-olive-wash: #31371b;
+    --g-slate: #a7b4c2; --g-slate-wash: #2b3138;
   }
 }
 
@@ -596,3 +612,47 @@ dialog.wide { width: min(820px, calc(100vw - 32px)); }
 #calConnectBtn { margin-left: auto; }
 #calConnectBtn + #calRefreshBtn { margin-left: 0; }
 @media (hover: none) { .ev-del { opacity: 1; } }
+
+/* ---------- 0.6.3: time fields, goal colours ---------- */
+input.clock {
+  width: 4.4em; font: 500 14px var(--num); font-variant-numeric: tabular-nums; color: var(--ink);
+  background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 2px 4px; outline: none;
+}
+.h12 input.clock { width: 6.4em; }
+input.clock:hover:not([readonly]) { border-color: var(--faint); }
+input.clock:focus { border-color: var(--moss); background: var(--raise); }
+.h12 .ev-time-in { width: 10.4em; }
+.h12 .ev-time { min-width: 9.6em; }
+
+button.goal { border: 0; font-family: inherit; cursor: default; }
+.goal[style] { color: var(--gc); background: var(--gcw); }
+button.goal:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.gdot {
+  flex: 0 0 auto; width: 12px; height: 12px; border-radius: 50%; padding: 0; margin-left: 8px;
+  border: 1.5px dashed var(--faint); background: transparent; opacity: 0;
+}
+.gdot.on { border: 0; background: var(--gc); opacity: 1; }
+.row:hover .gdot, .gdot:focus-visible { opacity: 1; }
+.ribbon .seg.plan.tinted { background: var(--gc); }
+.ribbon .seg.plan + .seg.plan { box-shadow: inset 2px 0 0 var(--bg); }
+.colorpop { width: auto; max-width: 280px; }
+.swatches { display: flex; flex-wrap: wrap; gap: 8px; padding: 4px 2px 2px; }
+.swatch {
+  width: 24px; height: 24px; border-radius: 50%; padding: 0; border: 0; background: var(--gc);
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / .08);
+}
+.swatch[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--raise), 0 0 0 4px var(--ink); }
+.swatch:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+.swatch.none { background: transparent; border: 1.5px dashed var(--faint); position: relative; }
+.swatch.none::after { content: ""; position: absolute; left: 4px; right: 4px; top: 50%; height: 1.5px; background: var(--faint); transform: rotate(-45deg); }
+@media (hover: none) { .gdot { opacity: 1; } }
+
+/* ---------- remembered actions ---------- */
+.suggest .pick-item { position: relative; }
+.suggest .forget {
+  margin-left: 6px; width: 20px; height: 20px; line-height: 19px; text-align: center; border-radius: 50%;
+  color: var(--muted); font-size: 15px; opacity: 0; flex: 0 0 auto;
+}
+.suggest .pick-item:hover .forget, .suggest .pick-item[aria-selected="true"] .forget { opacity: .8; }
+.suggest .forget:hover { background: var(--rule); color: var(--ink); opacity: 1; }
+.suggest .pick-item > span:first-child { margin-right: auto; }

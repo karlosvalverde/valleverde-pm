@@ -6,6 +6,7 @@ A small desktop planner for project managers, for the step before Odoo. It works
 - **Week goals** for the projects that matter this week.
 - **Tasks:** projects and their time-boxed actions, like `15m FU` or `Icons - 2h`.
 - **Time left:** the durations in your open lines, added up and compared with what remains of your working day.
+- **Time format:** Settings, then **Time format**: 24-hour, 12-hour, or like your Mac's 24-hour time setting. Type times either way: `18:30`, `6:30pm`, `18.30`.
 - **Projects:** in your own order, with a sheet per project with its to-dos, schedule, SPOC, DB, current website, version, task link, deadline, BA, salesperson, languages involved, goal, references, apps, sitemap and notes.
 - **Mail templates** in English, Spanish, French and Italian, in categories, with links, 12 suggested templates, and a language review by Claude. They fill in from the project.
 - **Website copy:** page-by-page copy for web design projects, in each of the site's languages.
@@ -31,6 +32,9 @@ Type the way you would in a note. Write a duration anywhere in a line (`15m`, `2
 
 You can also drag a line by the dots to its left.
 
+- **Hours planned:** next to the Tasks heading, the day's total, and how much is done.
+- **Goal colours:** click a goal's badge in the tasks, or the dot next to a week goal, to give it a colour. Its tasks take that colour on the day ribbon.
+- **Remembered actions:** lines you've written on two or more days are offered as you type, with their duration; under a heading, its usual actions come first. Type another duration and it's kept. The × on a suggestion stops it being offered.
 - **Picking a project as you type:** on an empty project line, a list of your projects opens and narrows as you type a name or a number. Return or a click links the line and opens an action line under it; **Create project “…”** makes a new one. Under a linked project, an empty action line lists its open to-dos. Nothing is picked unless it's highlighted, so free text stays free, and Esc closes the list.
 - **Linking tasks:** hover a task and choose **Link**, or press ⌘L, to link it to a project. The picker finds projects by name or number.
   - For a single task or an action, you can then pick one of the project's open to-dos, or add the task as a new to-do. Checking it off in either place checks both.
@@ -56,12 +60,12 @@ You can also drag a line by the dots to its left.
 The list is in your own order. Drag a project by the dots to its left, or focus the dots and use ↑ and ↓. Its number is its place in the list, and follows it. Typing another number next to a project's name moves it there. New, imported and restored projects go to the bottom.
 
 - **The list** shows each project's first SPOC, its next phase, open to-dos and how soon it's due.
-- **Select** lets you pick several projects to **Duplicate**, **Archive** or **Delete** together. **Duplicate** on a sheet copies one project, with everything reset to not done.
+- **Select** lets you pick several projects to **Duplicate**, **Mark as done** or **Delete** together. **Duplicate** on a sheet copies one project, with everything reset to not done.
 - **Project schedule:** a list of phases, each with an optional date and a check when done. New projects start with the list from Settings, which is Homepage design + design line definition, Website design, Content review / adjustments, Training / Q&A, Go live. Press Return in a phase to add one after it.
 - **Dates:** the deadline and phase dates can stay empty (“No deadline”, “No date”) and be removed once set.
 - **SPOC** takes one contact per line.
 - **Links:** any field holding a link or a domain (like `partena.odoo.com`) gets an **Open** button.
-- **Archive** moves a project out of the list without deleting it.
+- **Mark as done** moves a finished project to the **Done** section at the bottom of the list, without deleting it. **Reopen** brings it back, at the bottom of your projects.
 
 **Plan today**, next to a project to-do, adds it to today's plan under the project, linked. It keeps the link when carried over to another day. The plan's week lists the deadlines and phase dates that fall in it.
 

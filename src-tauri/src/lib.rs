@@ -449,6 +449,37 @@ async fn fetch_calendar(url: String) -> Result<String, String> {
     .map_err(err)?
 }
 
+/// The Mac's clock setting: "24" or "12" when "24-hour time" is set in System Settings, and the region
+/// (like "en_ES"), which decides when it isn't. The page can't see either: WebKit formats times by language only.
+#[tauri::command]
+fn clock_format() -> serde_json::Value {
+    #[cfg(target_os = "macos")]
+    {
+        let read = |key: &str| -> Option<String> {
+            let out = std::process::Command::new("/usr/bin/defaults")
+                .args(["read", "-g", key])
+                .output()
+                .ok()?;
+            if !out.status.success() {
+                return None;
+            }
+            Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        };
+        let forced = if read("AppleICUForce24HourTime").as_deref() == Some("1") {
+            Some("24")
+        } else if read("AppleICUForce12HourTime").as_deref() == Some("1") {
+            Some("12")
+        } else {
+            None
+        };
+        serde_json::json!({ "forced": forced, "locale": read("AppleLocale") })
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        serde_json::json!({ "forced": null, "locale": null })
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -464,7 +495,8 @@ pub fn run() {
             open_external,
             save_text_file,
             save_text_files,
-            fetch_calendar
+            fetch_calendar,
+            clock_format
         ])
         .run(tauri::generate_context!())
         .expect("error while running Valleverde PM");

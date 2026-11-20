@@ -213,13 +213,13 @@
   /* ---------- text exports ---------- */
   const box = done => (done ? '- [x] ' : '- [ ] ');
 
-  function dayAsText(day, date, goals, today, agenda) {
+  function dayAsText(day, date, goals, today, agenda, h12) {
     const { left, done } = dayMinutes(day);
     const out = [fmtDots(date)];
     if (date < today) out.push(`Done: ${fmtDur(done)}`, `Not done: ${fmtDur(left)}`);
     else out.push(`Time left: ${fmtDur(left)}`);
-    if (day.begin) out.push(`Begin: ${day.begin.replace(/^0/, '')}`);
-    if (day.end) out.push(`End: ${day.end.replace(/^0/, '')}`);
+    if (day.begin) out.push(`Begin: ${h12 ? fmtTime(day.begin, true) : day.begin.replace(/^0/, '')}`);
+    if (day.end) out.push(`End: ${h12 ? fmtTime(day.end, true) : day.end.replace(/^0/, '')}`);
     if (agenda && agenda.length) out.push('', 'Agenda', ...agenda.map(x => `- ${x}`));
     const g = (goals || []).filter(x => x.text.trim());
     if (g.length) out.push('', 'Week goals', ...g.map(x => box(x.done) + x.text));
@@ -1316,15 +1316,16 @@
     if (cur) total += cur[1] - cur[0];
     return Math.round(total);
   }
-  const hm = ms => { const d = new Date(ms); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+  const hm = (ms, h12) => { const d = new Date(ms); return fmtTime(`${pad(d.getHours())}:${pad(d.getMinutes())}`, h12); };
+  const hmRaw = ms => { const d = new Date(ms); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
   // "10:00–11:00", or "until 11:00" / "from 22:00" for events that cross midnight.
-  function eventTime(o, date) {
+  function eventTime(o, date, h12) {
     if (o.allDay) return 'All day';
     const a = parseYmd(date).getTime(), b = parseYmd(addDays(date, 1)).getTime();
     if (o.start < a && o.end > b) return 'All day';
-    if (o.start < a) return `Until ${hm(o.end)}`;
-    if (o.end > b) return `From ${hm(o.start)}`;
-    return o.end > o.start ? `${hm(o.start)}–${hm(o.end)}` : hm(o.start);
+    if (o.start < a) return `Until ${hm(o.end, h12)}`;
+    if (o.end > b) return `From ${hm(o.start, h12)}`;
+    return o.end > o.start ? fmtRangeTime(hmRaw(o.start), hmRaw(o.end), h12) : hm(o.start, h12);
   }
   // A meeting link in the location or title (Google Meet, Teams, Zoom or any web address).
   function eventLink(o) {
@@ -1348,12 +1349,15 @@
     const re = new RegExp(`^\\s*${CLOCK}(?:\\s*(?:[-–—]|to|a|à)\\s*${CLOCK})?(?=\\s|$)`, 'i');
     const m = re.exec(s);
     if (!m || (!m[2] && !m[3])) return null;
-    const start = clockMin(m[1], m[2], m[3]);
+    let start = clockMin(m[1], m[2], m[3]);
     if (start === null) return null;
     let end = null;
     if (m[4] !== undefined) {
-      end = clockMin(m[4], m[5], m[6] || m[3] || null);
+      end = Number(m[4]) === 24 && !+(m[5] || 0) && !m[6] ? 1440 : clockMin(m[4], m[5], m[6] || m[3] || null);
       if (end === null) return null;
+      if (end === 0 && start > 0) end = 1440;
+      // "1:00–2:30 PM": the start shares the end's PM when that keeps it before the end.
+      if (!m[3] && m[6]) { const s2 = clockMin(m[1], m[2], m[6]); if (s2 !== null && s2 < end) start = s2; }
       // "11:00-1" means one in the afternoon.
       if (end <= start && !m[6] && !m[3] && end < 720 && end + 720 > start) end += 720;
       if (end <= start) return null;
@@ -1372,7 +1376,7 @@
     const x = parseMeeting(`${text} x`, oldLen);
     return x && x.title === 'x' ? { start: x.start, end: x.end } : null;
   }
-  const meetingLabel = m => `${m.start}–${m.end}`;
+  const meetingLabel = (m, h12) => fmtRangeTime(m.start, m.end === '24:00' ? '00:00' : m.end, h12).replace(/–(12:00 AM|00:00)$/, h12 ? '–12:00 AM' : '–24:00');
 
   /* ---------- zip files, for Google Calendar's export ---------- */
   // The files in a zip whose names end in one of exts, as [{ name, bytes }]. Inflating needs DecompressionStream.
@@ -1407,6 +1411,67 @@
     return out;
   }
 
+  /* ---------- time format: 24-hour or 12-hour ---------- */
+  // "19:30" as "19:30", or as "7:30 PM" in 12-hour mode. "24:00" is the end of the day.
+  function fmtTime(t, h12) {
+    if (!/^\d{1,2}:\d{2}$/.test(String(t || ''))) return '';
+    const [h, m] = t.split(':').map(Number);
+    if (!h12) return `${pad(h)}:${pad(m)}`;
+    const hh = h % 24;
+    return `${hh % 12 || 12}:${pad(m)} ${hh < 12 ? 'AM' : 'PM'}`;
+  }
+  // A range, with the AM/PM said once when both ends share it: "10:00–11:30 AM".
+  function fmtRangeTime(a, b, h12) {
+    const x = fmtTime(a, h12), y = fmtTime(b, h12);
+    if (h12 && x.slice(-2) === y.slice(-2)) return `${x.slice(0, -3)}–${y}`;
+    return `${x}–${y}`;
+  }
+  // One time as typed in a time field: "19:30", "7:30pm", "19.30", "19h30", "1930", "7 pm", "19". -> "HH:MM" or null.
+  function parseClock(text) {
+    const m = /^\s*(\d{1,2})(?:\s*[:.h]?\s*(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.|a|p)?\s*$/i.exec(String(text || ''));
+    if (!m) return null;
+    const ap = m[3] ? (/^a/i.test(m[3]) ? 'am' : 'pm') : null;
+    const min = clockMin(m[1], m[2], ap);
+    return min === null ? null : hhmm(min);
+  }
+
+  /* ---------- remembered actions ---------- */
+  // What makes two actions the same: their words, without the duration, case or extra spaces.
+  const actionKey = t => stripDuration(String(t || '')).replace(/[\s\-–—:,]+$/, '').replace(/\s+/g, ' ').trim().toLowerCase();
+  // The text with its duration set to mins: the first duration replaced, or added at the end.
+  function withDuration(text, mins) {
+    const s = String(text || '');
+    const d = fmtDur(mins);
+    const re = new RegExp(DUR_SRC, 'iu');
+    return re.test(s) ? s.replace(re, (all, lead) => `${lead}${d}`) : `${s.replace(/\s+$/, '')} - ${d}`;
+  }
+  // Actions written on at least minDays different days, most used first, from every day but `except`.
+  // Each: { key, text (the latest wording), level, days, last, under: { parentKey: count } }.
+  function rememberedActions(days, except, forgotten, minDays) {
+    const map = new Map();
+    const skip = new Set(forgotten || []);
+    for (const [date, day] of Object.entries(days || {})) {
+      if (date === except) continue;
+      const L = (day && day.lines) || [];
+      let parent = '';
+      for (const l of L) {
+        if (l.level === 0) parent = actionKey(l.text);
+        if (l.level === 0 && l.ref) continue;
+        const key = actionKey(l.text);
+        if (key.length < 2 || skip.has(key)) continue;
+        const id = `${l.level}|${key}`;
+        let a = map.get(id);
+        if (!a) { a = { key, text: l.text.trim(), level: l.level, days: new Set(), last: '', under: {} }; map.set(id, a); }
+        a.days.add(date);
+        if (date >= a.last) { a.last = date; a.text = l.text.trim(); }
+        if (l.level === 1 && parent) a.under[parent] = (a.under[parent] || 0) + 1;
+      }
+    }
+    return [...map.values()].filter(a => a.days.size >= (minDays || 2))
+      .map(a => ({ ...a, days: a.days.size }))
+      .sort((x, y) => y.days - x.days || (y.last > x.last ? 1 : y.last < x.last ? -1 : 0));
+  }
+
   root.Core = {
     pad, isDate, ymd, parseYmd, addDays, mondayOf, fmtLong, fmtShort, fmtDots, fmtRange,
     duration, stripDuration, fmtDur, toMin, isTime,
@@ -1425,6 +1490,7 @@
     linkHref, linkParts, plainMail, htmlMail, linkAt, linkMarkup,
     moveById, renumberProjects, moveProjectTo, moveTemplate,
     parseIcs, expandCalendar, eventsOn, busyMinutes, eventTime, eventLink, zonedMs,
-    parseMeeting, parseMeetingTime, meetingLabel, unzip
+    parseMeeting, parseMeetingTime, meetingLabel, unzip,
+    fmtTime, fmtRangeTime, parseClock, actionKey, withDuration, rememberedActions
   };
 })(globalThis);

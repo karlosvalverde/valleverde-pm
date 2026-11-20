@@ -1,7 +1,7 @@
 /* Valleverde PM: the interface. Logic that doesn't touch the page lives in core.js. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.6.2';
+  const APP_VERSION = '0.6.3';
   const SCHEMA = 6;
   const C = globalThis.Core;
 
@@ -33,7 +33,8 @@
         open: url => invoke('open_external', { url }),
         saveText: (name, content) => invoke('save_text_file', { name, content }),
         saveTexts: files => invoke('save_text_files', { files }),
-        fetchCalendar: url => invoke('fetch_calendar', { url })
+        fetchCalendar: url => invoke('fetch_calendar', { url }),
+        clockFormat: () => invoke('clock_format')
       };
     }
     const KEY = 'valleverde-pm-v2';
@@ -45,7 +46,8 @@
       open: async url => { window.open(url, '_blank', 'noopener'); },
       saveText: async (name, content) => { download(name, content); return 'your downloads'; },
       saveTexts: async files => { for (const f of files) download(f.name, f.content); return 'your downloads'; },
-      fetchCalendar: async () => { throw new Error('Calendar addresses refresh in the desktop app. Here, import an .ics file instead.'); }
+      fetchCalendar: async () => { throw new Error('Calendar addresses refresh in the desktop app. Here, import an .ics file instead.'); },
+      clockFormat: async () => null
     };
     function download(name, content) {
       const a = document.createElement('a');
@@ -77,11 +79,32 @@
       settings: {
         begin: '09:30', end: '18:30', me: { name: '', signature: '', lang: 'en' },
         defaultSchedule: C.DEFAULT_SCHEDULE.slice(), assistant: 'claude-desktop',
-        meetingsInBudget: true, calendarHint: true
+        meetingsInBudget: true, calendarHint: true, timeFormat: 'system'
       },
-      weeks: {}, days: {}, projects: [], templates: [], templateCats: [], calendars: [], drafts: {}, meetings: {}
+      weeks: {}, days: {}, projects: [], templates: [], templateCats: [], calendars: [], drafts: {}, meetings: {}, forgottenActions: []
     };
   }
+  /* ---------- time format ----------
+     WebKit formats time fields by the page's language, not by the Mac's 24-hour setting, so the app shows
+     times itself. "Like my Mac" reads that setting through the app (see clock_format in lib.rs). */
+  let sysClock = null;
+  function systemUses12() {
+    if (sysClock && sysClock.forced) return sysClock.forced === '12';
+    const loc = ((sysClock && sysClock.locale) || navigator.language || 'en-GB').replace(/_/g, '-').replace(/@.*$/, '');
+    try {
+      const hc = new Intl.DateTimeFormat(loc, { hour: 'numeric' }).resolvedOptions().hourCycle;
+      return hc === 'h12' || hc === 'h11';
+    } catch { return false; }
+  }
+  const use12 = () => (D.settings.timeFormat === '12' ? true : D.settings.timeFormat === '24' ? false : systemUses12());
+  const showTime = t => C.fmtTime(t, use12());
+
+  // Colours for week goals: the badge, the tasks that serve the goal, and their part of the day ribbon.
+  const GOAL_COLORS = {
+    teal: 'Teal', blue: 'Blue', violet: 'Violet', pink: 'Pink', orange: 'Orange', amber: 'Amber', olive: 'Olive', slate: 'Slate'
+  };
+  const goalStyle = c => (c && GOAL_COLORS[c] ? ` style="--gc:var(--g-${c});--gcw:var(--g-${c}-wash)"` : '');
+
   function normalizeData(o) {
     const b = blank();
     if (!o || typeof o !== 'object') return b;
@@ -92,6 +115,7 @@
       if (C.isDate(x.moved)) l.moved = x.moved;
       if (x.ref && typeof x.ref === 'object' && x.ref.p) l.ref = x.ref.t ? { p: String(x.ref.p), t: String(x.ref.t) } : { p: String(x.ref.p) };
       if (C.isDate(x.planned)) l.planned = x.planned;
+      if (GOAL_COLORS[x.color]) l.color = x.color;
       return l;
     };
     const str = v => (typeof v === 'string' ? v : '');
@@ -102,6 +126,8 @@
     b.settings.me = { name: str(me.name), signature: str(me.signature), lang: okLang(me.lang) };
     b.settings.assistant = C.ASSISTANTS[o.settings && o.settings.assistant] ? o.settings.assistant : 'claude-desktop';
     if (o.settings && o.settings.meetingsInBudget === false) b.settings.meetingsInBudget = false;
+    if (o.settings && ['24', '12', 'system'].includes(o.settings.timeFormat)) b.settings.timeFormat = o.settings.timeFormat;
+    if (Array.isArray(o.forgottenActions)) b.forgottenActions = o.forgottenActions.filter(k => typeof k === 'string').slice(-500);
     if (o.settings && o.settings.calendarHint === false) b.settings.calendarHint = false;
     if (o.settings && Array.isArray(o.settings.defaultSchedule)) b.settings.defaultSchedule = o.settings.defaultSchedule.map(str).filter(x => x.trim());
     b.projects = arr(o.projects).map(p => {
@@ -385,7 +411,7 @@
       const chk = e.target.closest('button.chk');
       if (chk) { this.toggle(chk.closest('.row').dataset.id); return; }
       const row = e.target.closest('.row');
-      if (row && !e.target.closest('input')) row.querySelector('input').focus();
+      if (row && !e.target.closest('input, [data-act]')) row.querySelector('input').focus();
     }
     onInput(e) {
       const input = e.target;
@@ -617,7 +643,8 @@
       decorate: g => {
         if (g.done || !g.text.trim()) return '';
         const m = plannedForGoal(g.text);
-        return m ? `<span class="note">${C.fmtDur(m)} planned</span>` : '';
+        const dot = readOnly ? '' : `<button type="button" class="gdot${g.color ? ' on' : ''}" data-act="goal-color" data-goal="${esc(g.id)}"${goalStyle(g.color)} title="${g.color ? `${GOAL_COLORS[g.color]}: change the colour` : 'Choose a colour'}" aria-label="Colour of this goal"></button>`;
+        return (m ? `<span class="note">${C.fmtDur(m)} planned</span>` : '') + dot;
       },
       onChange: onListChange
     });
@@ -630,7 +657,11 @@
         let h = linkChip(l, i, L);
         if (l.level) return h;
         const g = goalNumber(l);
-        if (g) h += `<span class="goal" title="Serves week goal ${g}">Goal ${g}</span>`;
+        if (g) {
+          const goal = weekGoals()[g - 1];
+          h += readOnly ? `<span class="goal"${goalStyle(goal.color)}>Goal ${g}</span>`
+            : `<button type="button" class="goal" data-act="goal-color" data-goal="${esc(goal.id)}"${goalStyle(goal.color)} title="Serves week goal ${g}: ${esc(goal.text.trim())}. Choose its colour">Goal ${g}</button>`;
+        }
         const m = C.groupMinutes(L, i);
         if (m.kids) {
           if (m.open) h += `<span class="sum">${C.fmtDur(m.open)}</span>`;
@@ -660,6 +691,7 @@
   const VIEWS = ['plan', 'projects', 'mail'];
   function render() {
     renderNotice();
+    document.documentElement.classList.toggle('h12', use12());
     for (const v of VIEWS) {
       $('#view-' + v).hidden = ui.view !== v;
       $('#tab-' + v).setAttribute('aria-selected', String(ui.view === v));
@@ -674,6 +706,7 @@
     flush();
     closePicker();
     sugHide();
+    closeColorPop(false);
     if (v !== 'projects') { ui.selecting = false; ui.sel.clear(); }
     ui.view = v;
     if ('project' in opts) ui.project = opts.project;
@@ -733,9 +766,10 @@
       }
     }
     const b = $('#begin'), e = $('#end');
-    if (document.activeElement !== b) b.value = day.begin || '';
-    if (document.activeElement !== e) e.value = day.end || '';
-    b.disabled = e.disabled = !!readOnly;
+    if (document.activeElement !== b) b.value = showTime(day.begin);
+    if (document.activeElement !== e) e.value = showTime(day.end);
+    b.readOnly = e.readOnly = !!readOnly;
+    $('#tasksTotal').textContent = left + done ? `${C.fmtDur(left + done)} planned${done ? `, ${C.fmtDur(done)} done` : ''}` : '';
     $('#doneTotal').textContent = !past && done ? `${C.fmtDur(done)} done` : '';
     const meet = past ? null : meetingsLeft(day, ui.date);
     $('#meetTotal').textContent = meet ? `${C.fmtDur(meet)} of meetings${ui.date === t ? ' left' : ''}` : '';
@@ -766,7 +800,18 @@
     };
     for (let h = Math.ceil(b / 60) * 60; h < e; h += 60) if (h > b) add('tick', h - b, h - b + span / 900);
     add('seg gone', 0, elapsed);
-    add('seg plan', elapsed, Math.min(elapsed + left, total));
+    // The planned work, in task order, coloured by the goal each task serves.
+    let at = elapsed;
+    for (const part of planParts(day)) {
+      const to = Math.min(at + part.min, total);
+      if (to > at) {
+        add(part.color ? 'seg plan tinted' : 'seg plan', at, to);
+        const seg = r.lastChild;
+        if (part.color) seg.style.setProperty('--gc', `var(--g-${part.color})`);
+        seg.title = `${part.label}: ${C.fmtDur(part.min)}`;
+      }
+      at += part.min;
+    }
     add('seg over', total, elapsed + left);
     if (span > total) {
       const m = document.createElement('span');
@@ -789,7 +834,24 @@
       m.style.left = pct(elapsed);
       r.append(m);
     }
-    r.title = `${day.begin}–${day.end}`;
+    r.title = C.fmtRangeTime(day.begin, day.end, use12());
+  }
+  // Open work per top-level line, in order, with the colour of the goal it serves; next to each other when alike.
+  function planParts(day) {
+    const L = day.lines || [];
+    const out = [];
+    for (const [s] of C.groups(L)) {
+      const min = C.groupMinutes(L, s).open;
+      if (!min) continue;
+      const g = goalNumber(L[s]);
+      const goal = g ? weekGoals()[g - 1] : null;
+      const color = goal && goal.color ? goal.color : '';
+      const label = L[s].text.trim() || 'Untitled';
+      const last = out[out.length - 1];
+      if (last && last.color === color) { last.min += min; last.label = `${last.label}, ${label}`; }
+      else out.push({ min, color, label });
+    }
+    return out;
   }
 
   function previousDayWithLines(date) {
@@ -907,7 +969,7 @@
     return null;
   }
 
-  const fmtClock = ms => new Date(ms).toTimeString().slice(0, 5);
+  const fmtClock = ms => showTime(new Date(ms).toTimeString().slice(0, 5));
   function renderAgendaInfo(busy) {
     const btn = $('#calRefreshBtn');
     btn.hidden = !D.calendars.some(c => c.url && !c.hidden);
@@ -950,7 +1012,7 @@
         const p = m.ref && proj(m.ref.p);
         return `<div class="${cls}" data-mid="${esc(m.id)}">` +
           `<span class="ev-dot" style="background:${MINE.color}" title="${MINE.name}"></span>` +
-          `<input class="ev-time-in" data-mtime value="${esc(C.meetingLabel(m))}" aria-label="Time of ${esc(m.title || 'the meeting')}" title="Change the time, like 10:00–11:00 or 10:00 1h" ${INPUT_ATTRS}${ro}>` +
+          `<input class="ev-time-in" data-mtime value="${esc(C.meetingLabel(m, use12()))}" aria-label="Time of ${esc(m.title || 'the meeting')}" title="Change the time, like ${use12() ? '10:00–11:00 AM or 2 PM 1h' : '10:00–11:00 or 14:00 1h'}" ${INPUT_ATTRS}${ro}>` +
           `<input class="ev-title-in" data-mtitle value="${esc(m.title)}" aria-label="Meeting" placeholder="Meeting" ${INPUT_ATTRS}${ro}>` +
           (p ? `<button type="button" class="pchip" data-act="open-project" data-pid="${esc(p.id)}" title="Open ${esc(projectTitle(p))}">${esc(projectTitle(p))}</button>` : '') +
           join + (readOnly ? '' : '<button type="button" class="link ev-del" data-act="meeting-remove" title="Remove this meeting">Remove</button>') + '</div>';
@@ -958,7 +1020,7 @@
       const where = o.loc && !/^https?:\/\//i.test(o.loc) ? o.loc : '';
       return `<div class="${cls}" title="${esc([o.title, where, c.name].filter(Boolean).join('\n'))}">` +
         `<span class="ev-dot" style="background:${esc(c.color || CAL_COLORS[0])}"></span>` +
-        `<span class="ev-time">${esc(C.eventTime(o, ui.date))}</span>` +
+        `<span class="ev-time">${esc(C.eventTime(o, ui.date, use12()))}</span>` +
         `<span class="ev-title">${esc(o.title || 'Busy')}${where ? `<span class="ev-where">${esc(where)}</span>` : ''}</span>` + join + '</div>';
     }).join('');
     if (!evs.length && shown.length) h = `<p class="empty">${waiting.length && refreshing ? 'Loading your calendar…' : waiting.length && !errors.length ? 'Not loaded yet.' : 'No meetings.'}</p>`;
@@ -984,7 +1046,7 @@
     if (!el) return;
     const t = (ui.meetingText || '').trim();
     const m = t && C.parseMeeting(t);
-    el.textContent = !t ? '' : m ? `${C.meetingLabel(m)}${m.title ? '' : ', add a title'}. Return to add it` : 'Start with the time, like 10:00 or 10:00–11:30';
+    el.textContent = !t ? '' : m ? `${C.meetingLabel(m, use12())}${m.title ? '' : ', add a title'}. Return to add it` : `Start with the time, like ${use12() ? '10:00 AM or 2:30 PM' : '10:00 or 14:30'}`;
     el.classList.toggle('bad', !!t && !m);
   }
   function addMeeting() {
@@ -1030,7 +1092,7 @@
     if (!m || readOnly) return;
     const len = C.toMin(m.end === '24:00' ? '23:59' : m.end) - C.toMin(m.start);
     const t = C.parseMeetingTime(el.value, len > 0 ? len : 30);
-    if (!t) { el.value = C.meetingLabel(m); toast('Write the time like 10:00, 10:00–11:30 or 10:00 1h'); return; }
+    if (!t) { el.value = C.meetingLabel(m, use12()); toast(use12() ? 'Write the time like 10:00 AM, 10:00–11:30 AM or 2 PM 1h' : 'Write the time like 10:00, 10:00–11:30 or 14:00 1h'); return; }
     Object.assign(m, t);
     myMeetings(ui.date).sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
     changed();
@@ -1051,7 +1113,7 @@
     }
   });
   function agendaLines(date) {
-    return dayEvents(date).map(o => `${C.eventTime(o, date)} ${o.title || 'Busy'}`);
+    return dayEvents(date).map(o => `${C.eventTime(o, date, use12())} ${o.title || 'Busy'}`);
   }
 
   /* the calendar list in Settings */
@@ -1272,9 +1334,19 @@
     const ctx = { el, ghost: false, key: line.id, line, i, L, level: line.level, text: el.value };
     if (line.level === 0) return line.ref ? null : ctx;
     if (line.ref && line.ref.t) return null;
-    ctx.project = lineProject(L, C.groupStart(L, i));
-    return ctx.project ? ctx : null;
+    const gs = C.groupStart(L, i);
+    ctx.project = lineProject(L, gs);
+    ctx.parentKey = C.actionKey(L[gs].text);
+    return ctx;
   }
+  // Actions written on two or more other days, most used first. Recounted after each change; it's quick.
+  let remCache = { sig: '', list: [] };
+  function remembered() {
+    const sig = `${edits}|${ui.date}|${D.forgottenActions.length}`;
+    if (remCache.sig !== sig) remCache = { sig, list: C.rememberedActions(D.days, ui.date, D.forgottenActions, 2) };
+    return remCache.list;
+  }
+  const remItem = (a, mixed) => ({ act: 'remember', a, label: a.text, note: mixed ? 'Used before' : '', forget: a.key });
   const inPlan = p => viewDay(ui.date).lines.some(l => l.level === 0 && !l.done && l.ref && l.ref.p === p.id && !l.ref.t);
   function sugBuild(ctx) {
     if (ctx.meeting) {
@@ -1286,24 +1358,38 @@
     }
     const q = ctx.text.trim();
     if (q.length > 60) return { items: [], active: -1 };
+    const key = C.actionKey(q);
+    const firstStarting = (items, from) => { for (let k = from; k < items.length; k++) if (items[k].act === 'remember' && key && items[k].a.key.startsWith(key)) return k; return -1; };
     if (ctx.level === 0) {
-      if (C.duration(q)) return { items: [], active: -1 };
-      const found = C.findProjects(activeProjects(), q).slice(0, 50);
+      // Projects (unless a duration says it's a task), then lines like "1 - Meet" you've written on other days.
+      const found = C.duration(q) ? [] : C.findProjects(activeProjects(), q).slice(0, 50);
       const items = found.map(p => ({ act: 'project', p, label: projectTitle(p), note: inPlan(p) ? 'In the plan' : '' }));
-      if (q.length >= 2 && !D.projects.some(p => nameEq(p.name, q))) items.push({ act: 'create', label: `Create project “${q}”`, quiet: true });
+      const rem = remembered().filter(a => a.level === 0 && a.key !== key && (!key || a.key.includes(key)) && !D.projects.some(p => nameEq(p.name, a.text)));
+      items.push(...rem.slice(0, key ? 6 : 4).map(a => remItem(a, found.length > 0)));
+      if (!C.duration(q) && q.length >= 2 && !D.projects.some(p => nameEq(p.name, q))) items.push({ act: 'create', label: `Create project “${q}”`, quiet: true });
       const k = q.toLowerCase().replace(/^#/, '');
       const top = found[0];
       const auto = !!(k && top && (top.name.trim().toLowerCase().startsWith(k) || String(top.num) === k));
-      return { items, active: auto ? 0 : -1, head: 'Link to a project' };
+      return { items, active: auto ? 0 : firstStarting(items, 0), head: found.length || !rem.length ? 'Link to a project' : 'Used before' };
     }
+    // An action: the project's open to-dos, then actions you've written before, those under the same heading first.
     const p = ctx.project;
-    const used = new Set(ctx.L.filter(l => l.ref && l.ref.t && !l.moved).map(l => l.ref.t));
+    const items = [];
     const qq = C.stripDuration(q).toLowerCase();
-    const todos = p.todos.filter(t => !t.done && t.text.trim() && !used.has(t.id) && (!qq || t.text.toLowerCase().includes(qq)));
-    if (!todos.length) return { items: [], active: -1 };
-    const items = todos.slice(0, 30).map(t => ({ act: 'todo', p, t, label: t.text }));
-    if (qq.length >= 2 && !p.todos.some(t => t.text.trim().toLowerCase() === qq)) items.push({ act: 'new-todo', p, label: `Add “${C.stripDuration(q)}” as a to-do`, quiet: true });
-    return { items, active: qq && todos[0].text.toLowerCase().startsWith(qq) ? 0 : -1, head: `To-dos of ${projectTitle(p)}` };
+    let todos = [];
+    if (p) {
+      const used = new Set(ctx.L.filter(l => l.ref && l.ref.t && !l.moved).map(l => l.ref.t));
+      todos = p.todos.filter(t => !t.done && t.text.trim() && !used.has(t.id) && (!qq || t.text.toLowerCase().includes(qq)));
+      items.push(...todos.slice(0, 30).map(t => ({ act: 'todo', p, t, label: t.text })));
+    }
+    const under = a => a.under[ctx.parentKey] || 0;
+    const rem = remembered().filter(a => a.level === 1 && a.key !== key && (key ? a.key.includes(key) : under(a) > 0))
+      .sort((x, y) => under(y) - under(x));
+    items.push(...rem.slice(0, 8).map(a => remItem(a, todos.length > 0)));
+    if (p && todos.length && qq.length >= 2 && !p.todos.some(t => t.text.trim().toLowerCase() === qq)) items.push({ act: 'new-todo', p, label: `Add “${C.stripDuration(q)}” as a to-do`, quiet: true });
+    if (!items.length) return { items: [], active: -1 };
+    const active = qq && todos.length && todos[0].text.toLowerCase().startsWith(qq) ? 0 : firstStarting(items, todos.length);
+    return { items, active, head: todos.length ? `To-dos of ${projectTitle(p)}` : 'Used before' };
   }
   function sugHide() {
     if (sugBox.hidden) return;
@@ -1334,7 +1420,8 @@
     $('#suggestHead').textContent = sug.head;
     $('#suggestList').innerHTML = sug.items.map((x, k) =>
       `<button type="button" role="option" tabindex="-1" id="sug-${k}" class="pick-item${x.quiet ? ' quiet' : ''}" data-k="${k}" aria-selected="${k === sug.active}">` +
-      `<span>${esc(x.label)}</span>${x.note ? `<span class="note">${esc(x.note)}</span>` : ''}</button>`).join('');
+      `<span>${esc(x.label)}</span>${x.note ? `<span class="note">${esc(x.note)}</span>` : ''}` +
+      (x.forget ? `<span class="forget" data-forget="${esc(x.forget)}" role="button" aria-label="Stop suggesting “${esc(x.label)}”" title="Stop suggesting this">×</span>` : '') + '</button>').join('');
     const el = document.activeElement;
     if (el && el.matches(SUG_INPUTS)) {
       if (sug.active >= 0) el.setAttribute('aria-activedescendant', `sug-${sug.active}`); else el.removeAttribute('aria-activedescendant');
@@ -1386,6 +1473,19 @@
     }
     let i = L.indexOf(line);
     sugHide();
+    if (x.act === 'remember') {
+      const mins = C.duration(q);
+      line.text = mins && mins !== C.duration(x.a.text) ? C.withDuration(x.a.text, mins) : x.a.text;
+      if (line.level === 0 && C.groupEnd(L, i) === i + 1) {
+        // A heading like "1 - Meet": open an action line under it, where its usual actions are offered.
+        const child = { id: uid(), text: '', level: 1, done: false };
+        L.splice(i + 1, 0, child);
+        tasksOL.commit({ id: child.id, pos: 0 });
+        return;
+      }
+      tasksOL.commit({ id: line.id, pos: null });
+      return;
+    }
     if (x.act === 'project' || x.act === 'create') {
       let p = x.p;
       if (x.act === 'create') {
@@ -1446,13 +1546,74 @@
     box.addEventListener('focusout', () => setTimeout(() => { if (!document.activeElement || !document.activeElement.matches(SUG_INPUTS)) sugHide(); }, 0));
   }
   sugBox.addEventListener('mousedown', e => e.preventDefault());
-  sugBox.addEventListener('click', e => { const b = e.target.closest('[data-k]'); if (b) sugChoose(Number(b.dataset.k)); });
+  sugBox.addEventListener('click', e => {
+    const f = e.target.closest('[data-forget]');
+    if (f) {
+      if (readOnly) return;
+      D.forgottenActions.push(f.dataset.forget);
+      changed();
+      toast('It won’t be suggested again');
+      sugUpdate();
+      return;
+    }
+    const b = e.target.closest('[data-k]');
+    if (b) sugChoose(Number(b.dataset.k));
+  });
   sugBox.addEventListener('mousemove', e => {
     const b = e.target.closest('[data-k]');
     if (b && Number(b.dataset.k) !== sug.active) { sug.active = Number(b.dataset.k); sugPaint(); }
   });
   window.addEventListener('resize', () => { if (!sugBox.hidden) sugUpdate(); });
   document.addEventListener('scroll', () => { const el = document.activeElement; if (!sugBox.hidden && el && el.matches(SUG_INPUTS)) sugPlace(el); }, true);
+
+  /* ---------- choosing a goal's colour ---------- */
+  const colorPop = { goal: null, from: null };
+  function openColorPop(el) {
+    const g = ((D.weeks[week()] || {}).goals || []).find(x => x.id === el.dataset.goal);
+    if (!g || readOnly) return;
+    sugHide();
+    colorPop.goal = g.id;
+    colorPop.from = el;
+    const box = $('#colorPop');
+    $('#colorPopHead').textContent = g.text.trim() || 'Week goal';
+    $('#colorPopList').innerHTML = Object.entries(GOAL_COLORS).map(([k, name]) =>
+      `<button type="button" class="swatch" data-color="${k}" style="--gc:var(--g-${k})" aria-label="${name}" title="${name}" aria-pressed="${g.color === k}"></button>`).join('') +
+      `<button type="button" class="swatch none" data-color="" aria-label="No colour" title="No colour" aria-pressed="${!g.color}"></button>`;
+    box.hidden = false;
+    const r = el.getBoundingClientRect();
+    const w = box.offsetWidth, h = box.offsetHeight;
+    box.style.left = `${Math.max(12, Math.min(r.right - w, window.innerWidth - w - 12))}px`;
+    box.style.top = `${r.bottom + 6 + h > window.innerHeight - 12 ? r.top - h - 6 : r.bottom + 6}px`;
+    const on = box.querySelector('[aria-pressed="true"]');
+    (on || box.querySelector('.swatch')).focus();
+  }
+  function closeColorPop(refocus) {
+    const box = $('#colorPop');
+    if (box.hidden) return;
+    box.hidden = true;
+    if (refocus && colorPop.from && document.contains(colorPop.from)) colorPop.from.focus();
+    colorPop.goal = colorPop.from = null;
+  }
+  $('#colorPopList').addEventListener('click', e => {
+    const b = e.target.closest('[data-color]');
+    const g = b && ((D.weeks[week()] || {}).goals || []).find(x => x.id === colorPop.goal);
+    if (!g || readOnly) return;
+    if (b.dataset.color) g.color = b.dataset.color; else delete g.color;
+    closeColorPop(false);
+    changed();
+    goalsOL.refresh();
+    tasksOL.refresh();
+    renderBudget();
+  });
+  $('#colorPop').addEventListener('keydown', e => {
+    const list = [...$('#colorPopList').querySelectorAll('.swatch')];
+    const i = list.indexOf(document.activeElement);
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeColorPop(true); }
+    else if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { e.preventDefault(); list[Math.min(list.length - 1, i + 1)].focus(); }
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { e.preventDefault(); list[Math.max(0, i - 1)].focus(); }
+  });
+  document.addEventListener('mousedown', e => { if (!$('#colorPop').hidden && !e.target.closest('#colorPop, [data-act="goal-color"]')) closeColorPop(false); });
+  window.addEventListener('resize', () => closeColorPop(false));
 
   /* ---------- linking a plan line to a project or to-do ---------- */
   const pick = { lineId: null, step: 'project', project: null };
@@ -1643,7 +1804,7 @@
         `<button type="button" class="link" data-act="select-all">${n === D.projects.length && n ? 'Select none' : 'Select all'}</button>` +
         `<button type="button" class="btn ghost" data-act="batch-duplicate"${n ? '' : ' disabled'}>Duplicate</button>` +
         `<button type="button" class="btn ghost" data-act="batch-export"${n ? '' : ' disabled'}>Export</button>` +
-        `<button type="button" class="btn ghost" data-act="batch-archive"${n ? '' : ' disabled'}>${n && [...ui.sel].every(id => proj(id).archived) ? 'Restore' : 'Archive'}</button>` +
+        `<button type="button" class="btn ghost" data-act="batch-archive"${n ? '' : ' disabled'}>${n && [...ui.sel].every(id => proj(id).archived) ? 'Reopen' : 'Mark as done'}</button>` +
         `<button type="button" class="btn ghost danger" data-act="batch-delete"${n ? '' : ' disabled'}>Delete</button>` +
         '<button type="button" class="btn" data-act="select-done">Done</button>'
       : '<h1>Projects</h1>' +
@@ -1653,8 +1814,8 @@
     let h = active.length
       ? `<div class="plist" id="projOrder">${active.map(projectRow).join('')}</div>` +
         (active.length > 1 && !ui.selecting && !readOnly ? '<p class="hint list-hint">Drag a project by the dots to change its place. Its number follows its place in the list.</p>' : '')
-      : `<p class="empty">${archived.length ? 'All your projects are archived.' : 'Keep each project’s contacts, links, schedule, notes, to-dos and website copy in one place. Create one with New project, or bring your project notes over from Notes with Import.'}</p>`;
-    if (archived.length) h += `<details class="archived"${ui.selecting || ui.showArchived ? ' open' : ''}><summary>Archived (${archived.length})</summary><div class="plist">${archived.map(projectRow).join('')}</div></details>`;
+      : `<p class="empty">${archived.length ? 'All your projects are done.' : 'Keep each project’s contacts, links, schedule, notes, to-dos and website copy in one place. Create one with New project, or bring your project notes over from Notes with Import.'}</p>`;
+    if (archived.length) h += `<details class="archived"${ui.selecting || ui.showArchived ? ' open' : ''}><summary>Done (${archived.length})</summary><div class="plist">${archived.map(projectRow).join('')}</div></details>`;
     $('#projItems').innerHTML = h;
   }
   $('#projItems').addEventListener('toggle', e => { if (e.target.matches('details.archived')) ui.showArchived = e.target.open; }, true);
@@ -1704,7 +1865,7 @@
     const due = C.dueLabel(p.fields.deadline, t);
     const next = C.nextPhase(p);
     const bits = [];
-    if (p.archived) bits.push('<span class="note">Archived</span>');
+    if (p.archived) bits.push('<span class="note">Done</span>');
     bits.push(due ? dueHtml(due) : '<span class="note">No deadline</span>');
     if (next) bits.push(`<span class="note">Next: ${esc(next.text)}${next.date ? `, ${esc(C.fmtShort(next.date))}` : ''}</span>`);
     $('#pSub').innerHTML = bits.join('');
@@ -1730,8 +1891,8 @@
     const num = $('#pNum');
     if (document.activeElement !== num) num.value = p.num;
     num.readOnly = !!readOnly || p.archived;
-    num.title = p.archived ? 'Archived projects keep their last number' : 'Place in the project list: type another number to move it there';
-    $('#archBtn').textContent = p.archived ? 'Restore' : 'Archive';
+    num.title = p.archived ? 'Done projects keep their last number' : 'Place in the project list: type another number to move it there';
+    $('#archBtn').textContent = p.archived ? 'Reopen' : 'Mark as done';
     for (const b of document.querySelectorAll('#projSheet .crumbs .link')) b.disabled = !!readOnly && b.dataset.act !== 'project-mail';
     const tab = ui.sheetTab;
     for (const t of ['project', 'copy']) $('#st-' + t).setAttribute('aria-selected', String(tab === t));
@@ -2625,6 +2786,7 @@
     flush();
     closePicker();
     sugHide();
+    closeColorPop(false);
     ui.meetingText = '';
     ui.meetingRef = null;
     ui.date = date;
@@ -2649,7 +2811,7 @@
     },
     'goals-dismiss': () => { ensureWeek(week()).dismissed = true; changed(); renderBanners(); },
     menu: el => toggleMenu(el.getAttribute('aria-expanded') !== 'true'),
-    'copy-day': () => { toggleMenu(false); copy(C.dayAsText(viewDay(ui.date), ui.date, (D.weeks[week()] || {}).goals, today(), agendaLines(ui.date)), 'Day copied as text'); },
+    'copy-day': () => { toggleMenu(false); copy(C.dayAsText(viewDay(ui.date), ui.date, (D.weeks[week()] || {}).goals, today(), agendaLines(ui.date), use12()), 'Day copied as text'); },
     'copy-week': () => { toggleMenu(false); copy(C.weekSummary(D.days, week(), id => { const p = proj(id); return p ? projectTitle(p) : ''; }), 'Week summary copied'); },
     settings: () => { toggleMenu(false); openSettings(); },
     'choose-folder': () => chooseFolder(),
@@ -2704,15 +2866,15 @@
       C.renumberProjects(D.projects);
       changed();
       renderProjectList();
-      toast(`${restore ? 'Restored' : 'Archived'} ${list.length} ${list.length === 1 ? 'project' : 'projects'}`);
+      toast(`${restore ? 'Reopened' : 'Marked as done:'} ${list.length} ${list.length === 1 ? 'project' : 'projects'}`);
     },
     'batch-delete': async () => {
       if (readOnly || !ui.sel.size) return;
       const list = D.projects.filter(p => ui.sel.has(p.id));
       const ans = await ask({
         title: `Delete ${list.length === 1 ? projectTitle(list[0]) : `${list.length} projects`}?`,
-        body: `${list.length === 1 ? 'Its' : 'Their'} details, schedule and to-dos will be removed. Tasks already in your daily plans stay, without the link. To keep ${list.length === 1 ? 'it' : 'them'} out of the way instead, archive ${list.length === 1 ? 'it' : 'them'}.`,
-        a: 'Delete', b: 'Archive'
+        body: `${list.length === 1 ? 'Its' : 'Their'} details, schedule and to-dos will be removed. Tasks already in your daily plans stay, without the link. If ${list.length === 1 ? 'it’s' : 'they’re'} finished, mark ${list.length === 1 ? 'it' : 'them'} as done instead: ${list.length === 1 ? 'it' : 'they'} stay under Done.`,
+        a: 'Delete', b: 'Mark as done'
       });
       if (ans === 'a') { deleteProjects(list.map(p => p.id)); toast(`Deleted ${list.length} ${list.length === 1 ? 'project' : 'projects'}`); }
       else if (ans === 'b') { for (const p of list) p.archived = true; C.renumberProjects(D.projects); }
@@ -2766,13 +2928,13 @@
       p.archived = !p.archived;
       C.renumberProjects(D.projects);
       changed();
-      toast(p.archived ? 'Archived. It stays in the Archived list.' : `Restored to your projects, as #${p.num}`);
+      toast(p.archived ? 'Done. It stays under Done in your projects.' : `Reopened, as #${p.num}`);
       renderProjects();
     },
     'project-delete': async () => {
       const p = proj(ui.project);
       if (!p || readOnly) return;
-      const ans = await ask({ title: `Delete ${projectTitle(p)}?`, body: 'Its details, schedule and to-dos will be removed. Tasks already in your daily plans stay, without the link. To keep it out of the way instead, archive it.', a: 'Delete', b: 'Archive' });
+      const ans = await ask({ title: `Delete ${projectTitle(p)}?`, body: 'Its details, schedule and to-dos will be removed. Tasks already in your daily plans stay, without the link. If it’s finished, mark it as done instead: it stays under Done.', a: 'Delete', b: 'Mark as done' });
       if (ans === 'a') { deleteProjects([p.id]); changed(); setView('projects', { project: null }); toast('Project deleted'); }
       else if (ans === 'b') { p.archived = true; C.renumberProjects(D.projects); changed(); renderProjects(); }
     },
@@ -2818,6 +2980,7 @@
       if (ui.view === 'plan') { renderAgenda(); renderBudget(); }
     },
     'meeting-remove': el => { const m = meetingOf(el); if (m) removeMeeting(m.id); },
+    'goal-color': el => { if (!$('#colorPop').hidden && colorPop.from === el) closeColorPop(true); else openColorPop(el); },
     'ev-open': el => Backend.open(el.dataset.url).catch(e => toast(String(e))),
     'tp-use': () => useTemplatePick(),
     'cat-new': () => {
@@ -3029,14 +3192,25 @@
     if (!e.target.closest('#menu, [data-act="menu"]')) toggleMenu(false);
   });
 
-  for (const id of ['begin', 'end']) {
-    $('#' + id).addEventListener('change', e => {
-      if (readOnly || !C.isTime(e.target.value)) return;
-      ensureDay(ui.date)[id] = e.target.value;
+  // Begin and End: type a time either way (19:30, 7:30pm, 19.30); it shows in the format you chose.
+  const timeHint = () => (use12() ? 'Write a time like 9:30 AM or 6:30 PM' : 'Write a time like 9:30 or 18:30');
+  function timeField(el, get, set) {
+    el.addEventListener('change', () => {
+      if (readOnly) return;
+      const t = C.parseClock(el.value);
+      if (!t) { el.value = showTime(get()); toast(timeHint()); return; }
+      set(t);
+      el.value = showTime(t);
       changed();
-      renderBudget();
     });
+    el.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); el.blur(); }
+      if (e.key === 'Escape') { el.value = showTime(get()); el.blur(); }
+    });
+    el.addEventListener('focus', () => el.select());
   }
+  timeField($('#begin'), () => viewDay(ui.date).begin, t => { ensureDay(ui.date).begin = t; renderBudget(); });
+  timeField($('#end'), () => viewDay(ui.date).end, t => { ensureDay(ui.date).end = t; renderBudget(); });
 
   function toggleMenu(open) {
     const btn = $('[data-act="menu"]'), menu = $('#menu');
@@ -3114,22 +3288,28 @@
     $('#meSignature').value = D.settings.me.signature;
     $('#meLang').value = D.settings.me.lang;
     for (const id of ['meName', 'meSignature', 'meLang']) $('#' + id).disabled = !!readOnly;
-    $('#defBegin').value = D.settings.begin;
-    $('#defEnd').value = D.settings.end;
-    $('#defBegin').disabled = $('#defEnd').disabled = !!readOnly;
+    $('#defBegin').value = showTime(D.settings.begin);
+    $('#defEnd').value = showTime(D.settings.end);
+    $('#defBegin').readOnly = $('#defEnd').readOnly = !!readOnly;
+    const tf = $('#timeFormat');
+    tf.value = D.settings.timeFormat;
+    tf.disabled = !!readOnly;
+    tf.querySelector('[value="system"]').textContent = `Like my Mac (${systemUses12() ? '12-hour' : '24-hour'})`;
     $('#version').textContent = `Valleverde PM ${APP_VERSION}`;
     renderCalList();
     for (const k of document.querySelectorAll('[data-mod]')) k.textContent = MOD;
     for (const k of document.querySelectorAll('[data-alt]')) k.textContent = isMac ? 'Option' : 'Alt';
   }
   function openSettings() { renderSettings(); $('#settings').showModal(); }
-  for (const [id, key] of [['defBegin', 'begin'], ['defEnd', 'end']]) {
-    $('#' + id).addEventListener('change', e => {
-      if (readOnly || !C.isTime(e.target.value)) return;
-      D.settings[key] = e.target.value;
-      changed();
-    });
-  }
+  timeField($('#defBegin'), () => D.settings.begin, t => { D.settings.begin = t; });
+  timeField($('#defEnd'), () => D.settings.end, t => { D.settings.end = t; });
+  $('#timeFormat').addEventListener('change', e => {
+    if (readOnly || !['24', '12', 'system'].includes(e.target.value)) return;
+    D.settings.timeFormat = e.target.value;
+    changed();
+    renderSettings();
+    render();
+  });
 
   $('#assistant').addEventListener('change', e => {
     if (readOnly || !C.ASSISTANTS[e.target.value]) return;
@@ -3234,6 +3414,7 @@
       readOnly = `Couldn’t open your data file: ${e}. Nothing will be saved until the app is restarted.`;
       D = blank();
     }
+    try { sysClock = await Backend.clockFormat(); } catch { sysClock = null; }
     $('#app').hidden = false;
     render();
     setInterval(tick, 30000);

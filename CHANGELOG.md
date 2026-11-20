@@ -5,6 +5,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-11-10
+
+### Added
+- **Choose how times show:** Settings, then **Time format**: 24-hour (18:30), 12-hour (6:30 PM), or **Like my Mac**, which follows the 24-hour time setting in System Settings. It applies everywhere: Begin and End, working hours, the agenda, your meetings, the day ribbon and **Copy day as text**. You can type a time either way (`18:30`, `6:30pm`, `18.30`, `18h30`).
+- **Colours for week goals.** Click a goal's badge (**Goal 1**) in the tasks, or the dot next to the goal, and pick one of eight colours. The badge takes the colour, and the tasks serving that goal show in it on the day ribbon, in task order; hover a part to see what it is. Tasks without a coloured goal stay green.
+- **Hours planned for the day,** next to the Tasks heading: “5h45 planned, 30m done”.
+- **Remembered actions.** Lines you've written on two or more days are offered as you type in the plan, most used first, with their duration: under a heading like “1 - Meet”, its usual actions come up as soon as you start a line. Type a different duration and it's kept (`45m meet` picks “Meeting TDO - FU” as `45m Meeting TDO - FU`). The × on a suggestion stops it being offered.
+
+### Changed
+- **Archive is now Done.** **Mark as done** on a project sheet and in Select mode, a **Done** section at the bottom of the project list, and **Reopen** to bring a project back. Nothing changes in your data.
+- Begin and End are plain fields instead of the system's time picker, which ignored the Mac's 24-hour setting and showed AM/PM.
+
 ## [0.6.2] - 2026-11-04
 
 ### Added

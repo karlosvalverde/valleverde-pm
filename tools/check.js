@@ -513,6 +513,42 @@ const zipTest = (async () => {
   } catch (e) { failed++; console.log(`  FAIL the zip’s calendars inflate and parse\n       ${e.message}`); }
 })();
 
+console.log('0.6.3');
+test('times show in the chosen format, and read either way', () => {
+  assert.equal(C.fmtTime('19:30', false), '19:30');
+  assert.equal(C.fmtTime('19:30', true), '7:30 PM');
+  assert.equal(C.fmtTime('00:15', true), '12:15 AM');
+  assert.equal(C.fmtTime('12:00', true), '12:00 PM');
+  assert.equal(C.fmtRangeTime('10:00', '11:30', true), '10:00–11:30 AM', 'AM said once');
+  assert.equal(C.fmtRangeTime('11:00', '13:00', true), '11:00 AM–1:00 PM');
+  for (const [t, want] of [['19:30', '19:30'], ['7:30pm', '19:30'], ['19.30', '19:30'], ['19h30', '19:30'], ['1930', '19:30'], ['7 pm', '19:00'], ['19', '19:00'], ['12am', '00:00'], ['12:15 PM', '12:15'], ['25', null], ['7:75', null], ['noon', null]])
+    assert.equal(C.parseClock(t), want, t);
+  const m = t => { const x = C.parseMeeting(t); return x && `${x.start}-${x.end}`; };
+  assert.equal(m('1:00–2:30 PM Call'), '13:00-14:30', 'the start shares the end’s PM');
+  assert.equal(m('11:00–1 PM Lunch'), '11:00-13:00');
+  assert.equal(m('10:00 AM–10:30 AM X'), '10:00-10:30');
+  assert.deepEqual({ ...C.parseMeetingTime(C.meetingLabel({ start: '23:30', end: '24:00' }, true)) }, { start: '23:30', end: '24:00' }, 'a 12-hour label reads back');
+  assert.deepEqual({ ...C.parseMeetingTime(C.meetingLabel({ start: '13:00', end: '14:30' }, true)) }, { start: '13:00', end: '14:30' });
+  assert.match(C.dayAsText({ begin: '09:30', end: '18:30', lines: [] }, '2026-11-04', [], '2026-11-04', [], true), /Begin: 9:30 AM\nEnd: 6:30 PM/);
+});
+test('actions used on two or more days are remembered', () => {
+  const day = lines => ({ lines: lines.map(([text, level, ref]) => ({ text, level, ...(ref ? { ref } : {}) })) });
+  const days = {
+    '2026-11-01': day([['1 - Meet', 0], ['30m Meeting TDO - FU', 1], ['Reboot4You', 0, { p: 'b' }], ['[MAIL] Recap mail 15m', 1], ['Only once', 1]]),
+    '2026-11-02': day([['1 - Meet', 0], ['45m Meeting TDO - FU', 1], ['Reboot4You', 0, { p: 'b' }], ['[MAIL] Recap mail 15m', 1]]),
+    '2026-11-03': day([['1 - Meet', 0], ['Meeting TDO - FU', 1]])
+  };
+  const r = C.rememberedActions(days, '2026-11-03', [], 2);
+  assert.deepEqual([...r.map(a => `${a.level} ${a.text} ×${a.days}`)], ['0 1 - Meet ×2', '1 45m Meeting TDO - FU ×2', '1 [MAIL] Recap mail 15m ×2'],
+    'the latest wording; the day being planned and linked projects don’t count; once isn’t enough');
+  assert.equal(r[1].under['1 - meet'], 2, 'it knows which heading it goes under');
+  assert.equal(C.rememberedActions(days, '', ['[mail] recap mail'], 2).some(a => a.key === '[mail] recap mail'), false, 'forgotten ones stay out');
+  assert.equal(C.actionKey('  1h  Dry Run - '), 'dry run');
+  assert.equal(C.withDuration('30m Setup', 60), '1h Setup');
+  assert.equal(C.withDuration('[MAIL] Recap mail 15m', 30), '[MAIL] Recap mail 30m');
+  assert.equal(C.withDuration('Dry Run', 90), 'Dry Run - 1h30');
+});
+
 await zipTest;
 if (failed) { console.log(`\n${failed} check(s) failed.`); process.exit(1); }
 console.log('\nAll checks passed.');
