@@ -24,7 +24,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - **The plan no longer follows the clock.** Free time is your working day (End minus Begin) less everything planned, done or not, and your meetings. It reads the same at 10:00 and at 17:00, and on a past day. The bar shares the day out: done, still to do (in goal colours), meetings, then free, and anything that doesn't fit in red past the end of the day. It no longer shows the time gone or a mark for now. The agenda no longer fades past meetings or highlights the current one, and **Join** is always called Join.
 
 ### Fixed
-- **Colours didn't show in the app:** the colour palette, and the dots of the agenda and calendars. The app's security rule (`style-src 'self'`) ignores colours written into the page; they're now set by the stylesheet.
+- **Colours didn't show in the app:** the colour palette, and the dots of the agenda and calendars.
+- **Selecting text in an email's preview highlighted past its box,** across the whole width of the window. The same applied to other text you can select, such as hints and help. The app's security rule (`style-src 'self'`) ignores colours written into the page; they're now set by the stylesheet.
 
 ## [0.6.3] - 2026-11-10
 

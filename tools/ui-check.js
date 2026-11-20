@@ -160,6 +160,28 @@ await check('a new template from the suggestions', async () => {
   const sw = await page.$eval('#tplItems, #composeBody', () => true);
   ok(sw, 'compose');
 });
+await check('selected text is highlighted only inside its box', async () => {
+  // WebKit paints the gaps between selected lines up to the selection's root. Photograph the strips on both
+  // sides of the email's box, select its text, and photograph them again: they must not change.
+  const box = await page.locator('.preview').boundingBox();
+  const strips = [
+    { x: Math.max(0, box.x - 44), y: box.y, width: 40, height: box.height },
+    { x: box.x + box.width + 4, y: box.y, width: 40, height: box.height }
+  ];
+  await page.mouse.move(1, 1);
+  const before = await Promise.all(strips.map(clip => page.screenshot({ clip })));
+  await page.evaluate(() => {
+    const r = document.createRange();
+    r.selectNodeContents(document.querySelector('#pvBody'));
+    getSelection().removeAllRanges();
+    getSelection().addRange(r);
+  });
+  await page.waitForTimeout(100);
+  const after = await Promise.all(strips.map(clip => page.screenshot({ clip })));
+  await page.evaluate(() => getSelection().removeAllRanges());
+  ok(before[0].equals(after[0]), 'the highlight runs out of the box on the left');
+  ok(before[1].equals(after[1]), 'the highlight runs out of the box on the right');
+});
 await check('nothing is blocked by the content-security policy, and no errors', async () => {
   eq(JSON.stringify(await page.evaluate('window.__csp')), '[]', 'blocked');
   eq(JSON.stringify(errors), '[]', 'errors');

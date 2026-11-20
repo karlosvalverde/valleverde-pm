@@ -776,3 +776,8 @@ body.scrolled .sticky-view { box-shadow: 0 1px 0 var(--rule), -48px 0 0 var(--bg
   margin: -10px -10px 8px; padding: 10px 12px 6px; border-radius: 12px 12px 0 0;
 }
 .col.drop-into header { background: var(--moss-wash); }
+
+/* WebKit fills the gaps between selected lines up to the edges of the selection's root, which is the whole page
+   unless the text is a root itself. A transform makes it one (as would absolute positioning or clipped overflow;
+   relative positioning doesn't), so the highlight stays inside the text's box. It moves and clips nothing. */
+.rtxt, .path, .hint, .notice, .banner p, #cf-body, .pbody, .ro, details.how p { transform: translateX(0); }
