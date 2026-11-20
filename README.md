@@ -5,7 +5,8 @@ A small desktop planner for project managers, for the step before Odoo. It works
 - **Agenda:** today's meetings, typed in the plan or from your calendar (Google, Outlook, iCloud or a calendar file), with their time taken out of the free time.
 - **Week goals** for the projects that matter this week.
 - **Tasks:** projects and their time-boxed actions, like `15m FU` or `Icons - 2h`.
-- **Time left:** the durations in your open lines, added up and compared with what remains of your working day.
+- **Time left:** the durations in your open lines, added up. **Free** is your working day (End minus Begin) less everything planned and your meetings; it doesn't follow the clock, so a day reads the same in the morning and in the evening. The bar shares the day out: done, still to do, meetings and free, with what doesn't fit in red.
+- **Day or week:** **Day** and **Week** next to the date, or D and W. The week shows each day's plan against your hours, and you drag a task to another day to move it.
 - **Time format:** Settings, then **Time format**: 24-hour, 12-hour, or like your Mac's 24-hour time setting. Type times either way: `18:30`, `6:30pm`, `18.30`.
 - **Projects:** in your own order, with a sheet per project with its to-dos, schedule, SPOC, DB, current website, version, task link, deadline, BA, salesperson, languages involved, goal, references, apps, sitemap and notes.
 - **Mail templates** in English, Spanish, French and Italian, in categories, with links, 12 suggested templates, and a language review by Claude. They fill in from the project.
@@ -33,7 +34,8 @@ Type the way you would in a note. Write a duration anywhere in a line (`15m`, `2
 You can also drag a line by the dots to its left.
 
 - **Hours planned:** next to the Tasks heading, the day's total, and how much is done.
-- **Goal colours:** click a goal's badge in the tasks, or the dot next to a week goal, to give it a colour. Its tasks take that colour on the day ribbon.
+- **Project colours:** every project has a colour of its own, shown on its chip in the plan, on the day's bar and in the week. Change it with the dot next to the project's name.
+- **Undo:** ⌘Z and ⇧⌘Z undo and redo any change, including a deleted line or project.
 - **Remembered actions:** lines you've written on two or more days are offered as you type, with their duration; under a heading, its usual actions come first. Type another duration and it's kept. The × on a suggestion stops it being offered.
 - **Picking a project as you type:** on an empty project line, a list of your projects opens and narrows as you type a name or a number. Return or a click links the line and opens an action line under it; **Create project “…”** makes a new one. Under a linked project, an empty action line lists its open to-dos. Nothing is picked unless it's highlighted, so free text stays free, and Esc closes the list.
 - **Linking tasks:** hover a task and choose **Link**, or press ⌘L, to link it to a project. The picker finds projects by name or number.
@@ -42,7 +44,8 @@ You can also drag a line by the dots to its left.
 - **Projects and goals:** a task whose text, or linked project, matches a week goal shows “Goal 1”, “Goal 2”, and so on. The goal shows how much time is planned for it today. Numbering like `1 - Partena` or `1. Partena` is ignored when matching.
 - **Done items:** checking every action of a project checks the project, and done projects collect at the bottom.
 - **Moving work:** when a previous day still has open tasks, a banner offers to bring them over. The originals are marked “Moved to …”, so nothing is counted twice. Open goals carry over the same way at the start of a week.
-- **Sharing:** the ⋯ menu, in the plan, copies the day as text (with the agenda), in the same format as the note, or a week summary with the time done per project, ready for entering timesheets in Odoo. Linked tasks count under their project.
+- **Sharing:** the ⋯ menu, in the plan, copies the day as text (with the agenda), in the same format as the note, or a week summary with the time done per project. Linked tasks count under their project.
+- **Timesheets:** the ⋯ menu also copies a timesheet for the day (each project with its tasks and times, like `Partena: 2:15`) or for the week (a table of projects and days), or saves the day or the week as a CSV file for Odoo's timesheet import. Only what's checked as done counts, with its planned duration.
 
 ## Agenda
 
@@ -56,6 +59,10 @@ You can also drag a line by the dots to its left.
 - **Read-only:** the app never changes your calendar.
 
 ## Projects
+
+Each project has its colour, as a stripe in the list and on the board; the dot next to a project's name changes it.
+
+**List** and **Board** at the top switch views. The board has a column per deadline: Overdue, This week, Next week, This month, Later and No deadline. Drag a card to another column to change its deadline: it gets the Friday of that week, the last working day of the month, a date you choose for Later, or no deadline. The message after it has **Undo** and **Change**.
 
 The list is in your own order. Drag a project by the dots to its left, or focus the dots and use ↑ and ↓. Its number is its place in the list, and follows it. Typing another number next to a project's name moves it there. New, imported and restored projects go to the bottom.
 
@@ -187,11 +194,16 @@ git push && git push --tags
 src/                 the interface: plain HTML, CSS and JavaScript, no build step
   core.js            durations, outline operations, carry-over, text exports (tested)
   app.js             the page: outline editor, time budget, settings
+  icons.js           the Lucide icons the page uses (generated by npm run lucide)
 src-tauri/           the desktop shell (Rust)
   src/lib.rs         reads and writes the data file, backups, folder choice
 tools/check.js       release checks and tests for core.js
+tools/ui-check.js    interface checks in a browser engine, under the app's content-security policy
+tools/icons.js       copies the icons the app uses from Lucide
 tools/preview.js     serves src/ for the browser preview
 ```
+
+Icons are from [Lucide](https://lucide.dev), under the ISC licence; the notice is at the top of `src/icons.js`.
 
 The shell gives the page these commands:
 

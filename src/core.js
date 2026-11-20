@@ -16,6 +16,7 @@
   const LONG_Y = new Intl.DateTimeFormat('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
   const SHORT = new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric' });
   const DM = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short' });
+  const WEEKDAY = new Intl.DateTimeFormat('en-GB', { weekday: 'short' });
   const DMY = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
   const fmtLong = (s, withYear) => (withYear ? LONG_Y : LONG).format(parseYmd(s));
   const fmtShort = s => SHORT.format(parseYmd(s));
@@ -141,14 +142,6 @@
       if (l.done) done += m; else left += m;
     }
     return { left, done };
-  }
-
-  // Minutes still available in the working day, or null when it doesn't apply (past day, no hours).
-  function available(day, date, today, nowMin) {
-    const b = toMin(day.begin), e = toMin(day.end);
-    if (b === null || e === null || e <= b || date < today) return null;
-    if (date > today) return e - b;
-    return Math.max(0, e - Math.max(nowMin, b));
   }
 
   function groupMinutes(L, s) {
@@ -1472,11 +1465,126 @@
       .sort((x, y) => y.days - x.days || (y.last > x.last ? 1 : y.last < x.last ? -1 : 0));
   }
 
+  /* ---------- 0.7: the day as a plan, not a clock ---------- */
+  // The working day in minutes (End minus Begin), the same at any hour. null when the hours don't make sense.
+  function capacity(day) {
+    const b = toMin(day.begin), e = toMin(day.end);
+    return b === null || e === null || e <= b ? null : e - b;
+  }
+
+  /* ---------- moving one task group to another day ---------- */
+  // Like carryOver, for the group starting at s only: its open tasks are copied to dst, the originals
+  // marked as moved. Returns how many tasks moved.
+  function moveGroup(src, s, dst, dstDate, newId) {
+    const e = groupEnd(src, s);
+    const part = src.slice(s, e);
+    const n = carryOver(part, dst, dstDate, newId);
+    for (let k = 0; k < part.length; k++) src[s + k] = part[k];
+    return n;
+  }
+
+  /* ---------- timesheets ---------- */
+  // What was done, as entries { date, project, desc, min }: every checked line with a duration, under the
+  // project its task line is linked to, or under its heading when there's no project.
+  function timesheetEntries(days, dates, projectName) {
+    const out = [];
+    for (const date of dates) {
+      const L = (days[date] && days[date].lines) || [];
+      for (const [s, e] of groups(L)) {
+        const linked = L[s].ref && projectName && projectName(L[s].ref.p);
+        const head = label(stripDuration(L[s].text)).replace(/[\s\-–—:,]+$/, '') || 'Other';
+        for (let k = s; k < e; k++) {
+          const l = L[k];
+          const min = duration(l.text);
+          if (!l.done || l.moved || !min) continue;
+          const own = l.ref && !l.ref.t && projectName && projectName(l.ref.p);
+          const project = own || linked || (k === s ? 'Other' : head);
+          const desc = stripDuration(l.text).replace(/^[\s\-–—:,]+|[\s\-–—:,]+$/g, '') || project;
+          out.push({ date, project, desc: k === s && linked ? (desc === project ? 'Work' : desc) : desc, min });
+        }
+      }
+    }
+    return out;
+  }
+  const hhmm2 = min => `${Math.floor(min / 60)}:${pad(min % 60)}`;
+  // One day, per project, with each task under it: "Partena: 2:15" then "  Icons: 2:00".
+  function timesheetDay(entries, date) {
+    const mine = entries.filter(x => x.date === date);
+    if (!mine.length) return '';
+    const by = new Map();
+    for (const x of mine) { if (!by.has(x.project)) by.set(x.project, []); by.get(x.project).push(x); }
+    const total = mine.reduce((a, x) => a + x.min, 0);
+    const out = [`${fmtShort(date)}: ${hhmm2(total)}`];
+    for (const [p, xs] of by) {
+      out.push(`${p}: ${hhmm2(xs.reduce((a, x) => a + x.min, 0))}`);
+      for (const x of xs) out.push(`  ${x.desc}: ${hhmm2(x.min)}`);
+    }
+    return out.join('\n');
+  }
+  // A week as a table: a row per project, a column per day that has work, and totals.
+  function timesheetWeek(entries, monday) {
+    const dates = Array.from({ length: 7 }, (_, i) => addDays(monday, i));
+    const used = dates.filter(d => entries.some(x => x.date === d));
+    if (!used.length) return '';
+    const projects = [...new Set(entries.filter(x => used.includes(x.date)).map(x => x.project))];
+    const cell = (p, d) => entries.filter(x => x.project === p && x.date === d).reduce((a, x) => a + x.min, 0);
+    const head = ['', ...used.map(d => WEEKDAY.format(parseYmd(d))), 'Total'];
+    const rows = projects.map(p => [p, ...used.map(d => (cell(p, d) ? hhmm2(cell(p, d)) : '-')), hhmm2(used.reduce((a, d) => a + cell(p, d), 0))]);
+    const dayTotals = used.map(d => entries.filter(x => x.date === d).reduce((a, x) => a + x.min, 0));
+    rows.push(['Total', ...dayTotals.map(hhmm2), hhmm2(dayTotals.reduce((a, b) => a + b, 0))]);
+    const all = [head, ...rows];
+    const w = head.map((_, c) => Math.max(...all.map(r => r[c].length)));
+    return all.map(r => r.map((v, c) => (c === 0 ? v.padEnd(w[c]) : v.padStart(w[c]))).join('  ').replace(/\s+$/, '')).join('\n');
+  }
+  // For Odoo's timesheet import: the technical field names as headers, so the columns match by themselves.
+  function timesheetCsv(entries) {
+    const q = v => (/[",\n]/.test(v) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
+    const rows = entries.map(x => [x.date, q(x.project), q(x.desc), (Math.round(x.min / 60 * 100) / 100).toFixed(2)].join(','));
+    return ['date,project_id,name,unit_amount', ...rows].join('\n') + '\n';
+  }
+
+  /* ---------- the project board: columns by deadline ---------- */
+  const BUCKETS = [
+    { id: 'overdue', name: 'Overdue' }, { id: 'week', name: 'This week' }, { id: 'next', name: 'Next week' },
+    { id: 'month', name: 'This month' }, { id: 'later', name: 'Later' }, { id: 'none', name: 'No deadline' }
+  ];
+  // The date ranges of the columns, for today: [from, to] inclusive, or null when a column has no days.
+  function bucketRanges(today) {
+    const mon = mondayOf(today);
+    const weekEnd = addDays(mon, 6), nextEnd = addDays(mon, 13);
+    const d = parseYmd(today);
+    const monthEnd = ymd(new Date(d.getFullYear(), d.getMonth() + 1, 0));
+    return {
+      week: [today, weekEnd], next: [addDays(weekEnd, 1), nextEnd],
+      month: monthEnd > nextEnd ? [addDays(nextEnd, 1), monthEnd] : null,
+      later: [addDays(monthEnd > nextEnd ? monthEnd : nextEnd, 1), '9999-12-31']
+    };
+  }
+  function deadlineBucket(deadline, today) {
+    if (!isDate(deadline)) return 'none';
+    if (deadline < today) return 'overdue';
+    const r = bucketRanges(today);
+    for (const id of ['week', 'next', 'month', 'later']) if (r[id] && deadline >= r[id][0] && deadline <= r[id][1]) return id;
+    return 'later';
+  }
+  // The deadline a card gets when it's dropped in a column: the Friday of the week, or the month's last
+  // working day, never in the past. Later asks for a date; null when the column takes no drop.
+  function bucketDate(id, today) {
+    const r = bucketRanges(today);
+    const friday = mon => addDays(mon, 4);
+    const lastWorkday = end => { let x = end; while ([0, 6].includes(parseYmd(x).getDay())) x = addDays(x, -1); return x; };
+    const within = (x, range) => (x < range[0] ? range[0] : x > range[1] ? range[1] : x);
+    if (id === 'week') return within(friday(mondayOf(today)), r.week);
+    if (id === 'next') return friday(r.next[0]);
+    if (id === 'month') return r.month ? within(lastWorkday(r.month[1]), r.month) : null;
+    return null;
+  }
+
   root.Core = {
     pad, isDate, ymd, parseYmd, addDays, mondayOf, fmtLong, fmtShort, fmtDots, fmtRange,
     duration, stripDuration, fmtDur, toMin, isTime,
     groupStart, groupEnd, groups, firstDoneGroup, normalize, toggle, moveBlock, dropBlock,
-    dayMinutes, available, groupMinutes, openCount, carryOver,
+    dayMinutes, groupMinutes, openCount, carryOver,
     label, goalKey, goalMatch, dayAsText, weekSummary,
     PROJECT_FIELDS, emailIn, emailsIn, firstLine, nameIn, linkOf,
     DEFAULT_SCHEDULE, nextNumber, scheduleFrom, nextPhase, duplicateProject, findProjects, daysBetween, dueLabel,
@@ -1491,6 +1599,8 @@
     moveById, renumberProjects, moveProjectTo, moveTemplate,
     parseIcs, expandCalendar, eventsOn, busyMinutes, eventTime, eventLink, zonedMs,
     parseMeeting, parseMeetingTime, meetingLabel, unzip,
-    fmtTime, fmtRangeTime, parseClock, actionKey, withDuration, rememberedActions
+    fmtTime, fmtRangeTime, parseClock, actionKey, withDuration, rememberedActions,
+    capacity, moveGroup, timesheetEntries, timesheetDay, timesheetWeek, timesheetCsv,
+    BUCKETS, bucketRanges, deadlineBucket, bucketDate
   };
 })(globalThis);

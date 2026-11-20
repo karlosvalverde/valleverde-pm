@@ -9,48 +9,58 @@
 </head>
 <body>
   <div class="app" id="app" hidden>
-    <nav class="tabs" aria-label="Views">
+    <nav class="tabs sticky-top" aria-label="Views">
       <div class="tablist" role="tablist">
-        <button type="button" role="tab" data-act="view" data-view="plan" id="tab-plan" aria-controls="view-plan" title="Plan (⌘1)">Plan</button>
-        <button type="button" role="tab" data-act="view" data-view="projects" id="tab-projects" aria-controls="view-projects" title="Projects (⌘2)">Projects</button>
-        <button type="button" role="tab" data-act="view" data-view="mail" id="tab-mail" aria-controls="view-mail" title="Mail (⌘3)">Mail</button>
+        <button type="button" role="tab" data-act="view" data-view="plan" id="tab-plan" aria-controls="view-plan" title="Plan (⌘1)" data-icon="calendar-check">Plan</button>
+        <button type="button" role="tab" data-act="view" data-view="projects" id="tab-projects" aria-controls="view-projects" title="Projects (⌘2)" data-icon="folder-kanban">Projects</button>
+        <button type="button" role="tab" data-act="view" data-view="mail" id="tab-mail" aria-controls="view-mail" title="Mail (⌘3)" data-icon="mail">Mail</button>
       </div>
       <span class="grow"></span>
       <button type="button" class="save-error" id="saveState" data-act="retry-save" hidden>Not saved</button>
       <div class="menu-wrap" id="menuWrap">
-        <button type="button" class="icon" data-act="menu" aria-haspopup="menu" aria-expanded="false" aria-label="Copy the day or the week" title="Copy the day or the week">
-          <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="3.5" cy="8" r="1.2"/><circle cx="8" cy="8" r="1.2"/><circle cx="12.5" cy="8" r="1.2"/></svg>
-        </button>
+        <button type="button" class="icon" data-act="menu" aria-haspopup="menu" aria-expanded="false" aria-label="Copy the day or the week" title="Copy the day or the week" data-icon="ellipsis"></button>
         <div class="menu" id="menu" role="menu" hidden>
-          <button type="button" role="menuitem" data-act="copy-day">Copy day as text</button>
-          <button type="button" role="menuitem" data-act="copy-week">Copy week summary</button>
+          <button type="button" role="menuitem" data-act="copy-day" data-icon="copy">Copy day as text</button>
+          <button type="button" role="menuitem" data-act="copy-week" data-icon="copy">Copy week summary</button>
+          <hr>
+          <button type="button" role="menuitem" data-act="timesheet-day" data-icon="copy">Copy timesheet for the day</button>
+          <button type="button" role="menuitem" data-act="timesheet-week" data-icon="copy">Copy timesheet for the week</button>
+          <button type="button" role="menuitem" data-act="timesheet-csv-day" data-icon="file-spreadsheet">Save the day’s timesheet as CSV…</button>
+          <button type="button" role="menuitem" data-act="timesheet-csv" data-icon="file-spreadsheet">Save the week’s timesheet as CSV…</button>
         </div>
       </div>
-      <button type="button" class="icon" data-act="settings" aria-label="Settings" title="Settings (⌘,)">
-        <svg viewBox="0 0 16 16" aria-hidden="true"><circle class="hole" cx="8" cy="8" r="2.2"/><path d="M8 1.6v1.8M8 12.6v1.8M1.6 8h1.8M12.6 8h1.8M3.5 3.5l1.3 1.3M11.2 11.2l1.3 1.3M3.5 12.5l1.3-1.3M11.2 4.8l1.3-1.3"/></svg>
-      </button>
+      <button type="button" class="icon" data-act="settings" aria-label="Settings" title="Settings (⌘,)" data-icon="settings"></button>
     </nav>
 
     <p class="notice" id="notice" role="alert" hidden></p>
 
     <main id="view-plan" role="tabpanel" aria-labelledby="tab-plan">
-    <div class="top">
+    <div class="top sticky-view">
       <div class="daynav">
-        <button type="button" class="icon" data-act="prev" aria-label="Previous day" title="Previous day (←)">
-          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3 5 8l5 5"/></svg>
-        </button>
-        <button type="button" class="icon" data-act="next" aria-label="Next day" title="Next day (→)">
-          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m6 3 5 5-5 5"/></svg>
-        </button>
+        <button type="button" class="icon" data-act="prev" id="prevBtn" aria-label="Previous day" title="Previous day (←)" data-icon="chevron-left"></button>
+        <button type="button" class="icon" data-act="next" id="nextBtn" aria-label="Next day" title="Next day (→)" data-icon="chevron-right"></button>
       </div>
       <div class="when">
         <h1 id="date"></h1>
         <span class="rel" id="rel"></span>
       </div>
       <button type="button" class="btn ghost small" data-act="today" id="todayBtn" title="Go to today (T)">Today</button>
+      <div class="seg plan-mode" role="group" aria-label="Show">
+        <button type="button" data-act="plan-mode" data-mode="day" aria-pressed="true" title="One day (D)" data-icon="calendar">Day</button>
+        <button type="button" data-act="plan-mode" data-mode="week" aria-pressed="false" title="The whole week (W)" data-icon="calendar-range">Week</button>
+      </div>
     </div>
 
-    <header class="budget" aria-label="Time budget">
+    <section class="block weekview" aria-labelledby="h-weekview" id="weekView" hidden>
+      <div class="block-head">
+        <h2 id="h-weekview">The week</h2>
+        <span class="range" id="weekTotals"></span>
+      </div>
+      <div id="weekRows"></div>
+      <p class="hint">Drag a task to another day to move it there; the first day keeps it as moved, as Bring them over does. Click a day to plan it.</p>
+    </section>
+
+    <header class="budget day-only" aria-label="Time budget">
       <div class="figures">
         <p class="left" id="left"></p>
         <p class="slack" id="slack" aria-live="polite"></p>
@@ -64,12 +74,12 @@
       </div>
     </header>
 
-    <section class="block agenda" aria-labelledby="h-agenda" id="agendaBlock">
+    <section class="block agenda day-only" aria-labelledby="h-agenda" id="agendaBlock">
       <div class="block-head">
         <h2 id="h-agenda">Agenda</h2>
         <span class="range" id="agendaInfo"></span>
-        <button type="button" class="link" data-act="cal-add" id="calConnectBtn" title="Show events from Google Calendar, Outlook, iCloud or a calendar file">Connect a calendar</button>
-        <button type="button" class="link" data-act="cal-refresh" id="calRefreshBtn" title="Get the latest from your calendars">Refresh</button>
+        <button type="button" class="link" data-act="cal-add" id="calConnectBtn" title="Show events from Google Calendar, Outlook, iCloud or a calendar file" data-icon="calendar-plus">Connect a calendar</button>
+        <button type="button" class="link" data-act="cal-refresh" id="calRefreshBtn" title="Get the latest from your calendars" data-icon="refresh-cw">Refresh</button>
       </div>
       <div id="agenda"></div>
     </section>
@@ -84,7 +94,7 @@
       <p class="deadlines" id="weekDeadlines" hidden></p>
     </section>
 
-    <section class="block tasks" aria-labelledby="h-tasks">
+    <section class="block tasks day-only" aria-labelledby="h-tasks">
       <div class="block-head">
         <h2 id="h-tasks">Tasks</h2>
         <span class="range" id="tasksTotal" aria-live="polite"></span>
@@ -96,23 +106,22 @@
 
     <main id="view-projects" role="tabpanel" aria-labelledby="tab-projects" hidden>
       <section id="projList">
-        <div class="view-head" id="projHead"></div>
+        <div class="view-head sticky-view" id="projHead"></div>
         <div id="projItems"></div>
       </section>
       <section id="projSheet" hidden>
-        <div class="crumbs">
-          <button type="button" class="icon" data-act="projects-back" aria-label="All projects" title="All projects (Esc)">
-            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3 5 8l5 5"/></svg>
-          </button>
+        <div class="crumbs sticky-view">
+          <button type="button" class="icon" data-act="projects-back" aria-label="All projects" title="All projects (Esc)" data-icon="chevron-left"></button>
           <span class="crumb">Projects</span>
           <span class="grow"></span>
-          <button type="button" class="link" data-act="project-mail">Write an email</button>
+          <button type="button" class="link" data-act="project-mail" data-icon="mail">Write an email</button>
           <button type="button" class="link" data-act="project-duplicate">Duplicate</button>
           <button type="button" class="link" data-act="project-export">Export</button>
           <button type="button" class="link" data-act="project-archive" id="archBtn">Mark as done</button>
           <button type="button" class="link danger" data-act="project-delete">Delete</button>
         </div>
         <div class="ptitle-row">
+          <button type="button" class="pdot" id="pColor" data-act="project-color" aria-label="Colour of this project" title="Choose this project’s colour"></button>
           <label class="pnum-edit">#<input id="pNum" inputmode="numeric" aria-label="Place in the project list" autocomplete="off" spellcheck="false"></label>
           <input class="ptitle" id="pName" placeholder="Project name" aria-label="Project name" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
         </div>
@@ -141,21 +150,19 @@
 
     <main id="view-mail" role="tabpanel" aria-labelledby="tab-mail" hidden>
       <section id="mailList">
-        <div class="view-head">
+        <div class="view-head sticky-view">
           <h1>Mail templates</h1>
-          <button type="button" class="btn ghost" data-act="cat-new">New category</button>
-          <button type="button" class="btn" data-act="tpl-new">New template</button>
+          <button type="button" class="btn ghost" data-act="cat-new" data-icon="folder-plus">New category</button>
+          <button type="button" class="btn" data-act="tpl-new" data-icon="plus">New template</button>
         </div>
         <div id="tplItems"></div>
       </section>
       <section id="mailCompose" hidden>
-        <div class="crumbs">
-          <button type="button" class="icon" data-act="mail-back" aria-label="All templates" title="All templates (Esc)">
-            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3 5 8l5 5"/></svg>
-          </button>
+        <div class="crumbs sticky-view">
+          <button type="button" class="icon" data-act="mail-back" aria-label="All templates" title="All templates (Esc)" data-icon="chevron-left"></button>
           <span class="crumb">Mail templates</span>
           <span class="grow"></span>
-          <button type="button" class="link" data-act="tpl-edit" id="tplEditBtn">Edit template</button>
+          <button type="button" class="link" data-act="tpl-edit" id="tplEditBtn" data-icon="pencil">Edit template</button>
         </div>
         <div id="composeBody"></div>
       </section>
@@ -222,8 +229,8 @@
         <h3>Calendars</h3>
         <div id="calList"></div>
         <div class="actions">
-          <button type="button" class="btn" data-act="cal-add">Add a calendar…</button>
-          <button type="button" class="btn ghost" data-act="cal-file">Import a calendar file…</button>
+          <button type="button" class="btn" data-act="cal-add" data-icon="calendar-plus">Add a calendar…</button>
+          <button type="button" class="btn ghost" data-act="cal-file" data-icon="import">Import a calendar file…</button>
         </div>
         <label class="check"><input type="checkbox" id="meetingsInBudget"> Take meetings out of the free time in the plan</label>
         <p class="hint">Your agenda shows in the plan, read-only. Calendars added by address refresh every 15 minutes while the app is open. A calendar file (.ics, .ical, or the .zip Google Calendar exports) shows the events it had when you imported it; import it again to update it. You can also type your own meetings in the plan’s Agenda.</p>
@@ -282,7 +289,9 @@
           <dt><kbd>Tab</kbd> <kbd>Shift</kbd>+<kbd>Tab</kbd></dt><dd>Make a task part of the project above, or a project of its own</dd>
           <dt><kbd data-mod>⌘</kbd>+<kbd>Return</kbd></dt><dd>Check or uncheck the line</dd>
           <dt><kbd data-alt>Option</kbd>+<kbd>↑</kbd> <kbd>↓</kbd></dt><dd>Move the line, or the whole project</dd>
-          <dt><kbd>←</kbd> <kbd>→</kbd> <kbd>T</kbd></dt><dd>Previous day, next day, today (when not typing)</dd>
+          <dt><kbd>←</kbd> <kbd>→</kbd> <kbd>T</kbd></dt><dd>Previous day, next day, today; by week in the week view (when not typing)</dd>
+          <dt><kbd>D</kbd> <kbd>W</kbd></dt><dd>The plan by day or by week (when not typing)</dd>
+          <dt><kbd data-mod>⌘</kbd>+<kbd>Z</kbd>, <kbd>Shift</kbd>+<kbd data-mod>⌘</kbd>+<kbd>Z</kbd></dt><dd>Undo, redo</dd>
           <dt><kbd>N</kbd></dt><dd>Add a task (when not typing)</dd>
           <dt>Agenda</dt><dd>Type a meeting as “10:00 Partena kick-off”, “10:00–11:30 Steering” or “14:30 1h Call”, then Return</dd>
           <dt><kbd>↑</kbd> <kbd>↓</kbd> <kbd>Return</kbd></dt><dd>On an empty project line, pick a project from the list; under a linked project, pick one of its to-dos. Esc closes the list and keeps your text</dd>
@@ -354,6 +363,18 @@
     </form>
   </dialog>
 
+  <dialog id="dateDlg" aria-labelledby="dd-title">
+    <form method="dialog" class="sheet narrow">
+      <h2 id="dd-title">Deadline</h2>
+      <p class="hint" id="ddHint"></p>
+      <label class="ef">Date<input type="date" id="ddDate"></label>
+      <footer>
+        <button class="btn ghost" value="cancel">Cancel</button>
+        <button type="button" class="btn" data-act="date-apply" id="ddGo">Set deadline</button>
+      </footer>
+    </form>
+  </dialog>
+
   <dialog id="confirm" aria-labelledby="cf-title">
     <form method="dialog" class="sheet narrow">
       <h2 id="cf-title"></h2>
@@ -369,6 +390,7 @@
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
   <script src="core.js"></script>
+  <script src="icons.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

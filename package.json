@@ -10,10 +10,12 @@
     "preview": "node tools/preview.js",
     "check": "node tools/check.js",
     "icons": "tauri icon src-tauri/app-icon.png",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "lucide": "node tools/icons.js"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "2.12.4"
+    "@tauri-apps/cli": "2.12.4",
+    "lucide-static": "1.69.0"
   },
   "engines": {
     "node": ">=18"

@@ -54,13 +54,10 @@ test('the note in the screenshot has 7h of open task estimates', () => {
   };
   assert.deepEqual({ ...C.dayMinutes(day) }, { left: 420, done: 15 });
 });
-test('available time counts from now, or from the start of the day', () => {
-  const d = { begin: '09:30', end: '18:30' };
-  assert.equal(C.available(d, '2026-11-05', '2026-11-04', 600), 540);
-  assert.equal(C.available(d, '2026-11-04', '2026-11-04', 8 * 60), 540);
-  assert.equal(C.available(d, '2026-11-04', '2026-11-04', 17 * 60), 90);
-  assert.equal(C.available(d, '2026-11-04', '2026-11-04', 19 * 60), 0);
-  assert.equal(C.available(d, '2026-11-03', '2026-11-04', 600), null);
+test('the working day is the same whatever the hour', () => {
+  assert.equal(C.capacity({ begin: '09:30', end: '18:30' }), 540);
+  assert.equal(C.capacity({ begin: '18:30', end: '09:30' }), null);
+  assert.equal(C.capacity({ begin: '', end: '18:30' }), null);
 });
 test('checking the last child checks the parent and sinks the group', () => {
   const list = L([[0, 'A'], [1, 'a1', 1], [1, 'a2'], [0, 'B'], [0, 'Done', 1]]);
@@ -547,6 +544,54 @@ test('actions used on two or more days are remembered', () => {
   assert.equal(C.withDuration('30m Setup', 60), '1h Setup');
   assert.equal(C.withDuration('[MAIL] Recap mail 15m', 30), '[MAIL] Recap mail 30m');
   assert.equal(C.withDuration('Dry Run', 90), 'Dry Run - 1h30');
+});
+
+console.log('0.7.0');
+test('a timesheet from what was checked as done', () => {
+  const L = (...xs) => xs.map(([text, level, done, ref], i) => ({ id: String(i), text, level, done: !!done, ...(ref ? { ref } : {}) }));
+  const days = {
+    '2026-11-16': { lines: L(['Partena', 0, 1, { p: 'a' }], ['Icons - 2h', 1, 1], ['15m FU', 1, 1], ['Reboot4You', 0, 0, { p: 'b' }],
+      ['[MAIL] Recap mail 15m', 1, 1], ['30m Training prep', 1, 0], ['1 - Meet', 0, 1], ['30m Meeting TDO - FU', 1, 1]) },
+    '2026-11-17': { lines: L(['Partena', 0, 0, { p: 'a' }], ['1h Review', 1, 1], ['Self Learning 1h', 0, 1]) }
+  };
+  const e = C.timesheetEntries(days, ['2026-11-16', '2026-11-17'], id => ({ a: 'Partena', b: 'Reboot4You' })[id]);
+  assert.deepEqual([...e.map(x => `${x.date.slice(8)} ${x.project}: ${x.desc} ${x.min}`)], [
+    '16 Partena: Icons 120', '16 Partena: FU 15', '16 Reboot4You: [MAIL] Recap mail 15', '16 Meet: Meeting TDO - FU 30',
+    '17 Partena: Review 60', '17 Other: Self Learning 60'
+  ], 'only what’s done, by project or by heading');
+  assert.match(C.timesheetDay(e, '2026-11-16'), /^Mon 16: 3:00\nPartena: 2:15\n {2}Icons: 2:00\n {2}FU: 0:15\n/);
+  const week = C.timesheetWeek(e, '2026-11-16').split('\n');
+  assert.match(week[0], /Mon\s+Tue\s+Total$/);
+  assert.match(week[1], /^Partena\s+2:15\s+1:00\s+3:15$/);
+  assert.match(week[week.length - 1], /^Total\s+3:00\s+2:00\s+5:00$/);
+  assert.equal(C.timesheetCsv(e).split('\n')[0], 'date,project_id,name,unit_amount');
+  assert.equal(C.timesheetCsv([{ date: '2026-11-16', project: 'A, B', desc: `Say "hi"`, min: 45 }]).split('\n')[1], `2026-11-16,"A, B","Say ""hi""",0.75`);
+});
+test('board columns by deadline, and the date a drop gives', () => {
+  // Wednesday 18 November 2026: this week ends on Sunday 22, next week on Sunday 29, the month on Monday 30.
+  const t = '2026-11-18';
+  assert.equal(C.deadlineBucket('2026-11-17', t), 'overdue');
+  assert.equal(C.deadlineBucket('2026-11-22', t), 'week');
+  assert.equal(C.deadlineBucket('2026-11-23', t), 'next');
+  assert.equal(C.deadlineBucket('2026-11-30', t), 'month');
+  assert.equal(C.deadlineBucket('2026-12-01', t), 'later');
+  assert.equal(C.deadlineBucket('', t), 'none');
+  assert.equal(C.bucketDate('week', t), '2026-11-20', 'this Friday');
+  assert.equal(C.bucketDate('next', t), '2026-11-27', 'next Friday');
+  assert.equal(C.bucketDate('month', t), '2026-11-30', 'the last working day');
+  assert.equal(C.bucketDate('week', '2026-11-21'), '2026-11-21', 'on Saturday, never in the past');
+  assert.equal(C.bucketRanges('2026-11-26').month, null, 'no This month when next week reaches the end of it');
+});
+test('moving one task group to another day', () => {
+  const src = [{ id: '1', text: 'Partena', level: 0, done: false, ref: { p: 'a' } }, { id: '2', text: '1h Icons', level: 1, done: false },
+    { id: '3', text: '15m FU', level: 1, done: true }, { id: '4', text: 'Other', level: 0, done: false }];
+  const dst = [];
+  let n = 0;
+  assert.equal(C.moveGroup(src, 0, dst, '2026-11-18', () => `n${n++}`), 1);
+  assert.deepEqual([...dst.map(l => `${l.level} ${l.text}`)], ['0 Partena', '1 1h Icons'], 'the open part goes');
+  assert.equal(src[1].moved, '2026-11-18');
+  assert.equal(src[2].moved, undefined, 'done tasks stay');
+  assert.equal(src[3].moved, undefined, 'other groups stay');
 });
 
 await zipTest;

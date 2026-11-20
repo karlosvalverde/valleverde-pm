@@ -22,6 +22,10 @@
   --g-amber: #a88200; --g-amber-wash: #f3ebcc;
   --g-olive: #6c7d1f; --g-olive-wash: #e8edd2;
   --g-slate: #5c6b7a; --g-slate-wash: #e3e7eb;
+  --g-rose: #c23b4e; --g-rose-wash: #f8dde1;
+  --g-cyan: #13809b; --g-cyan-wash: #d4edf3;
+  --g-brown: #8a5a36; --g-brown-wash: #efe3d8;
+  --g-lime: #4f8a1c; --g-lime-wash: #e2efd3;
 
   --ui: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --num: ui-rounded, "SF Pro Rounded", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
@@ -52,6 +56,10 @@
     --g-amber: #e3c25a; --g-amber-wash: #3f3519;
     --g-olive: #b5c76a; --g-olive-wash: #31371b;
     --g-slate: #a7b4c2; --g-slate-wash: #2b3138;
+    --g-rose: #f08a98; --g-rose-wash: #45232a;
+    --g-cyan: #5cc8e3; --g-cyan-wash: #173a43;
+    --g-brown: #d1a27c; --g-brown-wash: #3d2f24;
+    --g-lime: #9ed36a; --g-lime-wash: #2b3a1c;
   }
 }
 
@@ -93,9 +101,7 @@ h1 { font-size: 17px; font-weight: 600; margin: 0; white-space: nowrap; overflow
   border: 0; border-radius: 7px; background: transparent; color: var(--muted); padding: 0;
 }
 .icon:hover { background: var(--rule); color: var(--ink); }
-.icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
-.icon svg circle { fill: currentColor; stroke: none; }
-.icon svg circle.hole { fill: none; stroke: currentColor; }
+.icon .i { width: 18px; height: 18px; stroke-width: 1.8; }
 
 .btn {
   border: 1px solid transparent; background: var(--moss); color: var(--moss-ink);
@@ -146,7 +152,6 @@ button:disabled { opacity: .45; }
 }
 .ribbon .plan { background: var(--moss); }
 .ribbon .over { background: var(--brick); border-radius: 0 6px 6px 0; }
-.ribbon .meet { top: auto; bottom: -5px; height: 3px; background: var(--sky); border-radius: 2px; }
 .ribbon .tick { top: 3px; bottom: 3px; min-width: 1px; background: var(--bg); opacity: .7; }
 .ribbon .endmark { top: -4px; bottom: -4px; width: 2px; margin-left: -1px; background: var(--ink); border-radius: 1px; }
 .ribbon .nowmark { top: -5px; bottom: -5px; width: 0; }
@@ -633,7 +638,6 @@ button.goal:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px
 }
 .gdot.on { border: 0; background: var(--gc); opacity: 1; }
 .row:hover .gdot, .gdot:focus-visible { opacity: 1; }
-.ribbon .seg.plan.tinted { background: var(--gc); }
 .ribbon .seg.plan + .seg.plan { box-shadow: inset 2px 0 0 var(--bg); }
 .colorpop { width: auto; max-width: 280px; }
 .swatches { display: flex; flex-wrap: wrap; gap: 8px; padding: 4px 2px 2px; }
@@ -656,3 +660,119 @@ button.goal:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px
 .suggest .pick-item:hover .forget, .suggest .pick-item[aria-selected="true"] .forget { opacity: .8; }
 .suggest .forget:hover { background: var(--rule); color: var(--ink); opacity: 1; }
 .suggest .pick-item > span:first-child { margin-right: auto; }
+
+/* ---------- 0.7: colours as classes (the app's security rule ignores style="") ---------- */
+.gc-teal { --gc: var(--g-teal); --gcw: var(--g-teal-wash); }
+.gc-blue { --gc: var(--g-blue); --gcw: var(--g-blue-wash); }
+.gc-violet { --gc: var(--g-violet); --gcw: var(--g-violet-wash); }
+.gc-pink { --gc: var(--g-pink); --gcw: var(--g-pink-wash); }
+.gc-orange { --gc: var(--g-orange); --gcw: var(--g-orange-wash); }
+.gc-amber { --gc: var(--g-amber); --gcw: var(--g-amber-wash); }
+.gc-olive { --gc: var(--g-olive); --gcw: var(--g-olive-wash); }
+.gc-slate { --gc: var(--g-slate); --gcw: var(--g-slate-wash); }
+.goal.gc { color: var(--gc); background: var(--gcw); }
+.ribbon .seg.plan.gc { background: var(--gc); }
+.cal-c0 { background: #3d7a50; } .cal-c1 { background: #3a6ea5; } .cal-c2 { background: #b0573b; }
+.cal-c3 { background: #8a5bb0; } .cal-c4 { background: #b08a2e; } .cal-c5 { background: #3a8f8f; }
+.cal-mine { background: #b08a2e; }
+
+/* ---------- the day shared out: done, to do, meetings, free ---------- */
+.ribbon .seg.done { background: var(--moss); opacity: .45; }
+.ribbon .seg.meetings { background: var(--sky); }
+.ribbon .seg + .seg { box-shadow: inset 2px 0 0 var(--bg); }
+
+/* ---------- day or week ---------- */
+.plan-mode { margin-left: 4px; align-self: center; }
+.weekview { margin-top: 18px; }
+.wrow { display: grid; grid-template-columns: 52px 1fr auto; gap: 14px; align-items: start; padding: 10px 6px; border-bottom: 1px solid var(--rule); border-radius: 8px; }
+.wrow:first-child { border-top: 1px solid var(--rule); }
+.wrow.today .wday b { color: var(--moss); }
+.wrow.drop-into { background: var(--moss-wash); }
+.wday { display: flex; flex-direction: column; align-items: flex-start; border: 0; background: none; padding: 2px 4px; border-radius: 6px; color: var(--muted); font-size: 12px; text-align: left; }
+.wday b { font-size: 19px; color: var(--ink); font-family: var(--num); font-weight: 600; line-height: 1.1; }
+.wday:hover { background: var(--rule); }
+.wmain { min-width: 0; }
+.ribbon.mini { height: 8px; margin: 6px 0 8px; }
+.wchips { display: flex; flex-wrap: wrap; gap: 6px; }
+.wchip {
+  display: inline-flex; gap: 5px; align-items: baseline; padding: 2px 9px; border-radius: 11px; font-size: 13px;
+  background: var(--raise); border: 1px solid var(--rule); cursor: grab; touch-action: none; max-width: 100%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.wchip b { font-weight: 600; font-family: var(--num); font-size: 12px; color: var(--muted); }
+.wchip.gc { border-color: var(--gc); }
+.wchip.gc b { color: var(--gc); }
+.wchip.dragging { opacity: .4; }
+.wfig { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-size: 12px; font-family: var(--num); white-space: nowrap; padding-top: 2px; }
+.wfig .wplan { color: var(--muted); }
+.wfig .slack { font-size: 13px; font-weight: 600; }
+
+/* ---------- the project board ---------- */
+body.wide .app { max-width: 1240px; }
+.board { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(168px, 1fr); gap: 12px; overflow-x: auto; padding-bottom: 8px; align-items: start; }
+.col { background: var(--rule); border-radius: 12px; padding: 10px; min-height: 120px; }
+.col header { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; margin: 0 2px 8px; }
+.col h2 { font-size: 13px; margin: 0; }
+.col.late h2 { color: var(--brick); }
+.col .col-span { width: 100%; font-size: 11.5px; color: var(--muted); }
+.col.drop-into { outline: 2px solid var(--moss); outline-offset: -2px; background: var(--moss-wash); }
+.col-cards { display: flex; flex-direction: column; gap: 8px; }
+.col-empty { font-size: 12px; color: var(--muted); margin: 6px 4px; }
+.card {
+  display: flex; flex-direction: column; gap: 3px; text-align: left; width: 100%; border: 1px solid transparent; border-radius: 9px;
+  background: var(--raise); padding: 9px 11px; box-shadow: 0 1px 2px rgb(0 0 0 / .08); color: var(--ink); touch-action: none;
+}
+.card:hover { border-color: var(--faint); }
+.card.dragging { opacity: .4; }
+.card-name { font-weight: 600; font-size: 14px; }
+.card-name .pnum { color: var(--muted); font-weight: 500; font-family: var(--num); }
+.card-meta { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-foot { display: flex; gap: 8px; align-items: baseline; font-size: 12px; margin-top: 2px; }
+.view-head .seg { align-self: center; }
+
+/* ---------- messages with Undo and Change ---------- */
+.toast.show.actions { pointer-events: auto; display: flex; align-items: center; gap: 12px; }
+.toast-btn { border: 0; background: none; color: var(--bg); font: inherit; font-weight: 700; padding: 0; text-decoration: underline; text-underline-offset: 2px; }
+.col header .note { font-size: 12px; color: var(--muted); }
+.wchips .note { font-size: 13px; color: var(--muted); }
+.card-name .pnum { min-width: 0; text-align: left; margin-right: 2px; }
+
+/* ---------- icons (Lucide) ---------- */
+.i { width: 15px; height: 15px; flex: 0 0 auto; stroke-width: 2; }
+.btn, .link, .seg button, .tablist button, .menu button, .chip { display: inline-flex; align-items: center; gap: 6px; }
+.btn .i, .menu .i { width: 15px; height: 15px; }
+.link .i { width: 14px; height: 14px; }
+.tablist button .i { width: 14px; height: 14px; opacity: .85; }
+.seg button .i { width: 14px; height: 14px; }
+.menu button .i { color: var(--muted); }
+
+/* ---------- a colour per project ---------- */
+.gc-rose { --gc: var(--g-rose); --gcw: var(--g-rose-wash); }
+.gc-cyan { --gc: var(--g-cyan); --gcw: var(--g-cyan-wash); }
+.gc-brown { --gc: var(--g-brown); --gcw: var(--g-brown-wash); }
+.gc-lime { --gc: var(--g-lime); --gcw: var(--g-lime-wash); }
+.prow.gc { box-shadow: inset 3px 0 0 var(--gc); }
+.card.gc { border-left: 4px solid var(--gc); }
+.pchip.gc { color: var(--gc); background: var(--gcw); border-color: transparent; }
+.pdot {
+  flex: 0 0 auto; align-self: center; width: 16px; height: 16px; margin-right: 10px; padding: 0; border-radius: 50%;
+  border: 0; background: var(--gc, var(--faint)); box-shadow: 0 0 0 2px var(--bg), 0 0 0 3px transparent;
+}
+.pdot:hover, .pdot:focus-visible { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--gc, var(--faint)); outline: none; }
+.swatch.used { opacity: .5; }
+.swatch.used[aria-pressed="true"] { opacity: 1; }
+.colorpop { max-width: 230px; }
+
+/* ---------- sticky headers ---------- */
+.tabs.sticky-top { position: sticky; top: 0; z-index: 30; background: var(--bg); padding-top: 14px; margin-top: -14px; padding-bottom: 6px; margin-bottom: 0; }
+.sticky-view { position: sticky; top: var(--tabs-h, 60px); z-index: 25; background: var(--bg); box-shadow: -48px 0 0 var(--bg), 48px 0 0 var(--bg); }
+body.scrolled .sticky-view { box-shadow: 0 1px 0 var(--rule), -48px 0 0 var(--bg), 48px 0 0 var(--bg); }
+.view-head.sticky-view, .crumbs.sticky-view { padding-top: 6px; padding-bottom: 8px; }
+
+/* The board wraps instead of scrolling sideways, so its column headings can stay at the top too. */
+.board { overflow: visible; grid-auto-flow: row; grid-template-columns: repeat(auto-fit, minmax(168px, 1fr)); grid-auto-columns: auto; }
+.col header {
+  position: sticky; top: calc(var(--tabs-h, 60px) + var(--head-h, 56px)); z-index: 5; background: var(--rule);
+  margin: -10px -10px 8px; padding: 10px 12px 6px; border-radius: 12px 12px 0 0;
+}
+.col.drop-into header { background: var(--moss-wash); }

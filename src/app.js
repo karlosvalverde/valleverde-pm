@@ -9,7 +9,6 @@
   const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const today = () => C.ymd(new Date());
-  const nowMin = () => { const n = new Date(); return n.getHours() * 60 + n.getMinutes(); };
   const isMac = /Mac/.test(navigator.platform || navigator.userAgent);
   const MOD = isMac ? '⌘' : 'Ctrl';
   const INPUT_ATTRS = 'autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"';
@@ -34,7 +33,8 @@
         saveText: (name, content) => invoke('save_text_file', { name, content }),
         saveTexts: files => invoke('save_text_files', { files }),
         fetchCalendar: url => invoke('fetch_calendar', { url }),
-        clockFormat: () => invoke('clock_format')
+        clockFormat: () => invoke('clock_format'),
+        saveCsv: (name, content) => invoke('save_csv_file', { name, content })
       };
     }
     const KEY = 'valleverde-pm-v2';
@@ -47,7 +47,8 @@
       saveText: async (name, content) => { download(name, content); return 'your downloads'; },
       saveTexts: async files => { for (const f of files) download(f.name, f.content); return 'your downloads'; },
       fetchCalendar: async () => { throw new Error('Calendar addresses refresh in the desktop app. Here, import an .ics file instead.'); },
-      clockFormat: async () => null
+      clockFormat: async () => null,
+      saveCsv: async (name, content) => { download(name, content); return 'your downloads'; }
     };
     function download(name, content) {
       const a = document.createElement('a');
@@ -99,11 +100,21 @@
   const use12 = () => (D.settings.timeFormat === '12' ? true : D.settings.timeFormat === '24' ? false : systemUses12());
   const showTime = t => C.fmtTime(t, use12());
 
-  // Colours for week goals: the badge, the tasks that serve the goal, and their part of the day ribbon.
-  const GOAL_COLORS = {
-    teal: 'Teal', blue: 'Blue', violet: 'Violet', pink: 'Pink', orange: 'Orange', amber: 'Amber', olive: 'Olive', slate: 'Slate'
+  // A colour per project, to tell them apart: in the list, on the board, in the plan, the week and the day ribbon.
+  const COLORS = {
+    teal: 'Teal', blue: 'Blue', violet: 'Violet', pink: 'Pink', orange: 'Orange', amber: 'Amber',
+    olive: 'Olive', slate: 'Slate', rose: 'Rose', cyan: 'Cyan', brown: 'Brown', lime: 'Lime'
   };
-  const goalStyle = c => (c && GOAL_COLORS[c] ? ` style="--gc:var(--g-${c});--gcw:var(--g-${c}-wash)"` : '');
+  // The first colour no project has yet; when all are taken, the least used one.
+  function freeColor(projects, except) {
+    const count = Object.fromEntries(Object.keys(COLORS).map(k => [k, 0]));
+    for (const p of projects) if (p !== except && count[p.color] !== undefined) count[p.color]++;
+    return Object.keys(COLORS).reduce((best, k) => (count[k] < count[best] ? k : best), Object.keys(COLORS)[0]);
+  }
+  const icon = name => (window.Icons && window.Icons[name]) || '';
+  // As classes, not style="": the app's content-security policy (style-src 'self') ignores inline styles.
+  const colorClass = c => (c && COLORS[c] ? ` gc gc-${c}` : '');
+  const projColor = id => { const p = id && proj(id); return p ? colorClass(p.color) : ''; };
 
   function normalizeData(o) {
     const b = blank();
@@ -115,7 +126,6 @@
       if (C.isDate(x.moved)) l.moved = x.moved;
       if (x.ref && typeof x.ref === 'object' && x.ref.p) l.ref = x.ref.t ? { p: String(x.ref.p), t: String(x.ref.t) } : { p: String(x.ref.p) };
       if (C.isDate(x.planned)) l.planned = x.planned;
-      if (GOAL_COLORS[x.color]) l.color = x.color;
       return l;
     };
     const str = v => (typeof v === 'string' ? v : '');
@@ -127,6 +137,8 @@
     b.settings.assistant = C.ASSISTANTS[o.settings && o.settings.assistant] ? o.settings.assistant : 'claude-desktop';
     if (o.settings && o.settings.meetingsInBudget === false) b.settings.meetingsInBudget = false;
     if (o.settings && ['24', '12', 'system'].includes(o.settings.timeFormat)) b.settings.timeFormat = o.settings.timeFormat;
+    if (o.settings && o.settings.planView === 'week') b.settings.planView = 'week';
+    if (o.settings && o.settings.projectView === 'board') b.settings.projectView = 'board';
     if (Array.isArray(o.forgottenActions)) b.forgottenActions = o.forgottenActions.filter(k => typeof k === 'string').slice(-500);
     if (o.settings && o.settings.calendarHint === false) b.settings.calendarHint = false;
     if (o.settings && Array.isArray(o.settings.defaultSchedule)) b.settings.defaultSchedule = o.settings.defaultSchedule.map(str).filter(x => x.trim());
@@ -141,13 +153,14 @@
         : C.scheduleFrom(b.settings.defaultSchedule, uid);
       return {
         id: String(p.id || uid()), num: Number.isInteger(p.num) && p.num > 0 ? p.num : 0,
-        name: str(p.name), archived: !!p.archived, lang: okLang(p.lang),
+        name: str(p.name), archived: !!p.archived, lang: okLang(p.lang), color: COLORS[p.color] ? p.color : '',
         fields, schedule, todos: C.normalize(arr(p.todos).map(line), 1), copy: normalizeCopy(p.copy)
       };
     });
     // Until 0.5 the number was set by hand; from 0.6 it is the position in the list, in the same order as before.
     if (!(o.schema >= 6)) b.projects.sort((x, y) => (x.num || 1e9) - (y.num || 1e9));
     C.renumberProjects(b.projects);
+    for (const p of b.projects) if (!p.color) p.color = freeColor(b.projects, p);
     b.templateCats = arr(o.templateCats).map(c => ({ id: String(c.id || uid()), name: str(c.name), ...(c.collapsed ? { collapsed: true } : {}) }));
     const cats = new Set(b.templateCats.map(c => c.id));
     b.templates = arr(o.templates).map(t => ({
@@ -193,6 +206,7 @@
   }
 
   const CAL_COLORS = ['#3d7a50', '#3a6ea5', '#b0573b', '#8a5bb0', '#b08a2e', '#3a8f8f'];
+  const calClass = hex => `cal-c${Math.max(0, CAL_COLORS.indexOf(hex))}`;
   function normalizeCalendar(c) {
     const str = v => (typeof v === 'string' ? v : '');
     if (!c.id) return null;
@@ -241,10 +255,12 @@
     lastWritten = r.content || '';
     lastSavedAt = D.savedAt || 0;
     calCache.clear();
+    undoReset();
   }
 
-  function changed() {
+  function changed(opts) {
     if (readOnly) return;
+    undoNote(opts && opts.view);
     edits++;
     dirty = true;
     clearTimeout(saveTimer);
@@ -320,6 +336,140 @@
     let m = 0;
     for (const [s] of C.groups(L)) if (lineNames(L[s]).some(t => C.goalMatch(goalText, t))) m += C.groupMinutes(L, s).open;
     return m;
+  }
+
+  /* ---------- the week view ---------- */
+  // A row per day: what's planned against what fits, and the day's tasks, which drag to another day.
+  const planMode = () => (D.settings.planView === 'week' ? 'week' : 'day');
+  function renderWeek() {
+    const t = today();
+    const dates = Array.from({ length: 7 }, (_, i) => C.addDays(week(), i))
+      .filter((d, i) => i < 5 || (D.days[d] && D.days[d].lines.length) || myMeetings(d).length || d === ui.date);
+    const tot = { planned: 0, cap: 0, done: 0 };
+    $('#weekRows').innerHTML = dates.map(d => {
+      const day = viewDay(d), plan = dayPlan(day, d);
+      tot.planned += plan.left + plan.done; tot.done += plan.done; tot.cap += plan.cap || 0;
+      const L = day.lines;
+      const chips = C.groups(L).filter(([s]) => !L[s].done && !L[s].moved).map(([s]) => {
+        const m = C.groupMinutes(L, s).open || C.duration(L[s].text);
+        const name = L[s].text.trim() || 'Untitled';
+        return `<span class="wchip${projColor(L[s].ref && L[s].ref.p)}" data-chip="${esc(L[s].id)}" data-date="${d}" title="Drag to another day">${esc(name)}${m ? ` <b>${C.fmtDur(m)}</b>` : ''}</span>`;
+      }).join('');
+      const fig = plan.cap === null ? '' : `<span class="wplan">${C.fmtDur(plan.left + plan.done)} of ${C.fmtDur(plan.cap)}</span>` +
+        `<span class="slack ${plan.free >= 0 ? 'free' : 'over'}">${plan.free >= 0 ? `${C.fmtDur(plan.free)} free` : `${C.fmtDur(-plan.free)} over`}</span>`;
+      const date = C.parseYmd(d);
+      return `<div class="wrow${d === t ? ' today' : ''}" data-wdate="${d}">` +
+        `<button type="button" class="wday" data-act="open-day" data-date="${d}" title="Plan ${esc(C.fmtLong(d))}"><span>${esc(date.toLocaleDateString('en-GB', { weekday: 'short' }))}</span><b>${date.getDate()}</b></button>` +
+        `<div class="wmain"><div class="ribbon mini" data-wribbon="${d}"></div><div class="wchips">${chips || '<span class="note">Nothing planned</span>'}</div></div>` +
+        `<div class="wfig">${fig}</div></div>`;
+    }).join('');
+    for (const el of $('#weekRows').querySelectorAll('[data-wribbon]')) {
+      const d = el.dataset.wribbon;
+      drawRibbon(el, viewDay(d), dayPlan(viewDay(d), d));
+    }
+    $('#weekTotals').textContent = tot.planned ? `${C.fmtDur(tot.planned)} planned of ${C.fmtDur(tot.cap)}${tot.done ? `, ${C.fmtDur(tot.done)} done` : ''}` : '';
+  }
+  function moveChip(id, from, to) {
+    if (readOnly || from === to) return;
+    const src = ensureDay(from).lines;
+    const s = src.findIndex(l => l.id === id);
+    if (s < 0) return;
+    const name = src[s].text.trim() || 'the task';
+    const n = C.moveGroup(src, s, ensureDay(to).lines, to, uid);
+    if (!n) return;
+    changed();
+    renderWeek();
+    toast(`Moved ${name} to ${C.fmtShort(to)}`);
+  }
+  // Dragging a task between days, with a mouse, a trackpad or touch.
+  (() => {
+    let drag = null;
+    const box = $('#weekRows');
+    const clear = () => { for (const el of box.querySelectorAll('.drop-into')) el.classList.remove('drop-into'); };
+    box.addEventListener('pointerdown', e => {
+      const chip = e.target.closest('[data-chip]');
+      if (!chip || readOnly || e.button !== 0) return;
+      e.preventDefault();
+      drag = { chip, x0: e.clientX, y0: e.clientY, moved: false, to: null };
+      try { chip.setPointerCapture(e.pointerId); } catch {}
+    });
+    box.addEventListener('pointermove', e => {
+      if (!drag) return;
+      if (!drag.moved && Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) < 5) return;
+      if (!drag.moved) { drag.moved = true; drag.chip.classList.add('dragging'); document.body.classList.add('sorting'); }
+      clear();
+      const row = document.elementFromPoint(e.clientX, e.clientY);
+      const r = row && row.closest('[data-wdate]');
+      drag.to = r && r.dataset.wdate !== drag.chip.dataset.date ? r.dataset.wdate : null;
+      if (drag.to) r.classList.add('drop-into');
+    });
+    const end = apply => {
+      if (!drag) return;
+      const { chip, to, moved } = drag;
+      drag = null;
+      clear();
+      chip.classList.remove('dragging');
+      document.body.classList.remove('sorting');
+      if (apply && moved && to) moveChip(chip.dataset.chip, chip.dataset.date, to);
+    };
+    box.addEventListener('pointerup', () => end(true));
+    box.addEventListener('pointercancel', () => end(false));
+  })();
+
+  /* ---------- timesheets ---------- */
+  const projName = id => { const p = proj(id); return p ? p.name.trim() || `Project ${p.num}` : ''; };
+  const weekEntries = () => C.timesheetEntries(D.days, Array.from({ length: 7 }, (_, i) => C.addDays(week(), i)), projName);
+
+  /* ---------- undo and redo ----------
+     Every change is a step, except that typing in one field is one step until you leave it or pause.
+     A step is the whole data as it was. Views (day or week, list or board) aren't steps. */
+  const undo = { back: [], fwd: [], base: '', field: null, at: 0, busy: false };
+  const VIEW_SETTINGS = ['planView', 'projectView', 'calendarHint'];
+  function undoReset() { undo.back = []; undo.fwd = []; undo.base = JSON.stringify(D); undo.field = null; }
+  function typingField() {
+    const el = document.activeElement;
+    if (!el) return null;
+    if (el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'date'].includes(el.type))) return el;
+    return null;
+  }
+  function undoNote(view) {
+    if (undo.busy) return;
+    if (!view) {
+      const f = typingField();
+      const same = f && f === undo.field && Date.now() - undo.at < 2000;
+      if (!same) {
+        undo.back.push(undo.base);
+        if (undo.back.length > 60) undo.back.shift();
+      }
+      undo.fwd = [];
+      undo.field = f;
+      undo.at = Date.now();
+    }
+    undo.base = JSON.stringify(D);
+  }
+  function undoStep(redo) {
+    if (readOnly) return;
+    const now = JSON.stringify(D);
+    const from = redo ? undo.fwd : undo.back, to = redo ? undo.back : undo.fwd;
+    let state = from.pop();
+    while (state !== undefined && state === now) state = from.pop();
+    if (state === undefined) { toast(redo ? 'Nothing to redo' : 'Nothing to undo'); return; }
+    to.push(now);
+    const keep = Object.fromEntries(VIEW_SETTINGS.map(k => [k, D.settings[k]]));
+    D = normalizeData(JSON.parse(state));
+    for (const k of VIEW_SETTINGS) if (keep[k] !== undefined) D.settings[k] = keep[k]; else delete D.settings[k];
+    undo.base = JSON.stringify(D);
+    undo.field = null;
+    calCache.clear();
+    undo.busy = true;
+    changed();
+    undo.busy = false;
+    if (ui.project && !proj(ui.project)) ui.project = null;
+    closePicker(); sugHide(); closeColorPop(false);
+    render();
+    if (ui.view === 'projects') renderProjects();
+    if ($('#settings').open) renderSettings();
+    toast(redo ? 'Redone' : 'Undone');
   }
 
   /* ---------- the outliner ---------- */
@@ -643,8 +793,7 @@
       decorate: g => {
         if (g.done || !g.text.trim()) return '';
         const m = plannedForGoal(g.text);
-        const dot = readOnly ? '' : `<button type="button" class="gdot${g.color ? ' on' : ''}" data-act="goal-color" data-goal="${esc(g.id)}"${goalStyle(g.color)} title="${g.color ? `${GOAL_COLORS[g.color]}: change the colour` : 'Choose a colour'}" aria-label="Colour of this goal"></button>`;
-        return (m ? `<span class="note">${C.fmtDur(m)} planned</span>` : '') + dot;
+        return m ? `<span class="note">${C.fmtDur(m)} planned</span>` : '';
       },
       onChange: onListChange
     });
@@ -659,8 +808,7 @@
         const g = goalNumber(l);
         if (g) {
           const goal = weekGoals()[g - 1];
-          h += readOnly ? `<span class="goal"${goalStyle(goal.color)}>Goal ${g}</span>`
-            : `<button type="button" class="goal" data-act="goal-color" data-goal="${esc(goal.id)}"${goalStyle(goal.color)} title="Serves week goal ${g}: ${esc(goal.text.trim())}. Choose its colour">Goal ${g}</button>`;
+          h += `<span class="goal" title="Serves week goal ${g}: ${esc(goal.text.trim())}">Goal ${g}</span>`;
         }
         const m = C.groupMinutes(L, i);
         if (m.kids) {
@@ -714,7 +862,12 @@
     window.scrollTo(0, 0);
   }
   function renderPlan() {
+    const wk = planMode() === 'week';
+    for (const el of document.querySelectorAll('#view-plan .day-only')) el.hidden = wk;
+    $('#weekView').hidden = !wk;
+    for (const b of document.querySelectorAll('[data-act="plan-mode"]')) b.setAttribute('aria-pressed', String(b.dataset.mode === planMode()));
     renderNav();
+    if (wk) { renderWeek(); $('#weekRange').textContent = C.fmtRange(week()); goalsOL.render(); renderWeekDeadlines(); return; }
     renderAgenda();
     renderBudget();
     $('#weekRange').textContent = C.fmtRange(week());
@@ -733,10 +886,16 @@
   }
   function renderNav() {
     const t = today();
+    const wk = planMode() === 'week';
     const withYear = ui.date.slice(0, 4) !== t.slice(0, 4);
-    $('#date').textContent = C.fmtLong(ui.date, withYear);
-    $('#rel').textContent = relative(ui.date);
-    $('#todayBtn').hidden = ui.date === t;
+    $('#date').textContent = wk ? C.fmtRange(week()) : C.fmtLong(ui.date, withYear);
+    const w = C.daysBetween(C.mondayOf(t), week()) / 7;
+    $('#rel').textContent = wk ? (w === 0 ? 'This week' : w === 1 ? 'Next week' : w === -1 ? 'Last week' : '') : relative(ui.date);
+    $('#todayBtn').hidden = wk ? week() === C.mondayOf(t) : ui.date === t;
+    $('#prevBtn').setAttribute('aria-label', wk ? 'Previous week' : 'Previous day');
+    $('#nextBtn').setAttribute('aria-label', wk ? 'Next week' : 'Next day');
+    $('#prevBtn').title = wk ? 'Previous week (←)' : 'Previous day (←)';
+    $('#nextBtn').title = wk ? 'Next week (→)' : 'Next day (→)';
   }
   function renderNotice() {
     const n = $('#notice');
@@ -744,97 +903,79 @@
     n.textContent = readOnly;
   }
 
+  // The day as a plan: what fits between Begin and End, against everything planned. The clock plays no part,
+  // so a past day, today and tomorrow read the same way.
+  function dayPlan(day, date) {
+    const { left, done } = C.dayMinutes(day);
+    const cap = C.capacity(day);
+    const meet = meetingMinutes(day, date);
+    return { left, done, cap, meet: meet || 0, free: cap === null ? null : cap - left - done - (meet || 0) };
+  }
   function renderBudget() {
     const day = viewDay(ui.date);
-    const t = today();
-    const past = ui.date < t;
-    const { left, done } = C.dayMinutes(day);
+    const plan = dayPlan(day, ui.date);
     const big = $('#left'), slack = $('#slack');
-    if (past) {
-      big.innerHTML = `${C.fmtDur(done)}<span class="unit"> done</span>`;
-      slack.className = 'slack quiet';
-      slack.textContent = left ? `${C.fmtDur(left)} not done` : '';
-    } else {
-      big.innerHTML = `${C.fmtDur(left)}<span class="unit"> left</span>`;
-      const avail = C.available(day, ui.date, t, nowMin());
-      const meet = meetingsLeft(day, ui.date);
-      if (avail === null) { slack.className = 'slack'; slack.textContent = ''; }
-      else {
-        const f = avail - left - (meet || 0);
-        slack.className = f >= 0 ? 'slack free' : 'slack over';
-        slack.textContent = f >= 0 ? `${C.fmtDur(f)} free` : `${C.fmtDur(-f)} over`;
-      }
+    big.innerHTML = `${C.fmtDur(plan.left)}<span class="unit"> left</span>`;
+    if (plan.free === null) { slack.className = 'slack'; slack.textContent = ''; }
+    else {
+      slack.className = plan.free >= 0 ? 'slack free' : 'slack over';
+      slack.textContent = plan.free >= 0 ? `${C.fmtDur(plan.free)} free` : `${C.fmtDur(-plan.free)} over`;
     }
     const b = $('#begin'), e = $('#end');
     if (document.activeElement !== b) b.value = showTime(day.begin);
     if (document.activeElement !== e) e.value = showTime(day.end);
     b.readOnly = e.readOnly = !!readOnly;
-    $('#tasksTotal').textContent = left + done ? `${C.fmtDur(left + done)} planned${done ? `, ${C.fmtDur(done)} done` : ''}` : '';
-    $('#doneTotal').textContent = !past && done ? `${C.fmtDur(done)} done` : '';
-    const meet = past ? null : meetingsLeft(day, ui.date);
-    $('#meetTotal').textContent = meet ? `${C.fmtDur(meet)} of meetings${ui.date === t ? ' left' : ''}` : '';
-    $('#meetTotal').title = meet ? 'Meetings in your working hours count against the free time. Change this in Settings, under Calendars.' : '';
-    renderRibbon(day, left, past);
+    $('#tasksTotal').textContent = plan.left + plan.done ? `${C.fmtDur(plan.left + plan.done)} planned${plan.done ? `, ${C.fmtDur(plan.done)} done` : ''}` : '';
+    $('#doneTotal').textContent = plan.done ? `${C.fmtDur(plan.done)} done` : '';
+    $('#meetTotal').textContent = plan.meet ? `${C.fmtDur(plan.meet)} of meetings` : '';
+    $('#meetTotal').title = plan.meet ? 'Meetings in your working hours count against the free time. Change this in Settings, under Calendars.' : '';
+    drawRibbon($('#ribbon'), day, plan);
   }
 
-  // The day as a bar: time gone, work planned, the end of the day, and anything that spills past it.
-  function renderRibbon(day, left, past) {
-    const r = $('#ribbon');
+  // The working day shared out, left to right: done, still to do (in goal colours), meetings, then free.
+  // What doesn't fit runs past a mark at the end of the day, in red.
+  function drawRibbon(r, day, plan) {
     r.replaceChildren();
-    const b = C.toMin(day.begin), e = C.toMin(day.end);
-    if (past || b === null || e === null || e <= b) { r.hidden = true; return; }
+    if (plan.cap === null) { r.hidden = true; return; }
     r.hidden = false;
-    const total = e - b;
-    const isToday = ui.date === today();
-    const now = nowMin();
-    const elapsed = isToday ? Math.min(Math.max(now - b, 0), total) : 0;
-    const span = Math.max(total, elapsed + left);
+    const cap = plan.cap;
+    const used = plan.done + plan.left + plan.meet;
+    const span = Math.max(cap, used);
     const pct = x => `${(x / span) * 100}%`;
-    const add = (cls, from, to) => {
-      if (to <= from) return;
+    const add = (cls, from, to, title) => {
+      to = Math.min(to, cap);
+      if (to <= from) return null;
       const s = document.createElement('span');
       s.className = cls;
       s.style.left = pct(from);
       s.style.width = pct(to - from);
+      if (title) s.title = title;
       r.append(s);
+      return s;
     };
-    for (let h = Math.ceil(b / 60) * 60; h < e; h += 60) if (h > b) add('tick', h - b, h - b + span / 900);
-    add('seg gone', 0, elapsed);
-    // The planned work, in task order, coloured by the goal each task serves.
-    let at = elapsed;
+    for (let h = 60; h < cap; h += 60) add('tick', h, h + span / 900);
+    let at = 0;
+    add('seg done', 0, plan.done, plan.done ? `Done: ${C.fmtDur(plan.done)}` : '');
+    at = plan.done;
     for (const part of planParts(day)) {
-      const to = Math.min(at + part.min, total);
-      if (to > at) {
-        add(part.color ? 'seg plan tinted' : 'seg plan', at, to);
-        const seg = r.lastChild;
-        if (part.color) seg.style.setProperty('--gc', `var(--g-${part.color})`);
-        seg.title = `${part.label}: ${C.fmtDur(part.min)}`;
-      }
+      add(part.color ? `seg plan gc gc-${part.color}` : 'seg plan', at, at + part.min, `${part.label}: ${C.fmtDur(part.min)}`);
       at += part.min;
     }
-    add('seg over', total, elapsed + left);
-    if (span > total) {
+    add('seg meetings', at, at + plan.meet, plan.meet ? `Meetings: ${C.fmtDur(plan.meet)}` : '');
+    at += plan.meet;
+    if (used > cap) {
+      const o = document.createElement('span');
+      o.className = 'seg over';
+      o.style.left = pct(cap);
+      o.style.width = pct(used - cap);
+      o.title = `Over: ${C.fmtDur(used - cap)}`;
+      r.append(o);
       const m = document.createElement('span');
       m.className = 'endmark';
-      m.style.left = pct(total);
+      m.style.left = pct(cap);
       r.append(m);
     }
-    // Meetings, at their own times, as a band along the bottom.
-    if (D.settings.meetingsInBudget) {
-      const base = C.parseYmd(ui.date).getTime();
-      for (const o of dayEvents(ui.date)) {
-        if (o.allDay || !o.busy) continue;
-        const from = Math.max(0, (o.start - base) / 60000 - b), to = Math.min(total, (o.end - base) / 60000 - b);
-        if (to > from) add('meet', from, to);
-      }
-    }
-    if (isToday && now >= b && now <= e) {
-      const m = document.createElement('span');
-      m.className = 'nowmark';
-      m.style.left = pct(elapsed);
-      r.append(m);
-    }
-    r.title = C.fmtRangeTime(day.begin, day.end, use12());
+    r.title = `${C.fmtRangeTime(day.begin, day.end, use12())}: ${C.fmtDur(cap)}`;
   }
   // Open work per top-level line, in order, with the colour of the goal it serves; next to each other when alike.
   function planParts(day) {
@@ -843,9 +984,8 @@
     for (const [s] of C.groups(L)) {
       const min = C.groupMinutes(L, s).open;
       if (!min) continue;
-      const g = goalNumber(L[s]);
-      const goal = g ? weekGoals()[g - 1] : null;
-      const color = goal && goal.color ? goal.color : '';
+      const p = L[s].ref && proj(L[s].ref.p);
+      const color = p && COLORS[p.color] ? p.color : '';
       const label = L[s].text.trim() || 'Untitled';
       const last = out[out.length - 1];
       if (last && last.color === color) { last.min += min; last.label = `${last.label}, ${label}`; }
@@ -935,12 +1075,12 @@
     return theirs.concat(myOccurrences(date))
       .sort((a, b) => (a.allDay !== b.allDay ? (a.allDay ? -1 : 1) : (a.start || 0) - (b.start || 0) || a.title.localeCompare(b.title)));
   }
-  // Busy meeting minutes still ahead in the working day, or null when meetings don't count.
-  function meetingsLeft(day, date) {
+  // Busy meeting minutes inside the working day, or null when meetings don't count.
+  function meetingMinutes(day, date) {
     if (!D.settings.meetingsInBudget || (!D.calendars.length && !myMeetings(date).length)) return null;
-    const b = C.toMin(day.begin), e = C.toMin(day.end), t = today();
-    if (b === null || e === null || e <= b || date < t) return null;
-    return C.busyMinutes(dayEvents(date), date, date === t ? Math.max(b, nowMin()) : b, e);
+    const b = C.toMin(day.begin), e = C.toMin(day.end);
+    if (b === null || e === null || e <= b) return null;
+    return C.busyMinutes(dayEvents(date), date, b, e);
   }
 
   let refreshing = null;
@@ -993,7 +1133,6 @@
     renderAgendaInfo(!!refreshing);
     const shown = D.calendars.filter(c => !c.hidden);
     const evs = dayEvents(ui.date);
-    const now = Date.now();
     const timed = evs.filter(o => !o.allDay);
     const busy = C.busyMinutes(evs, ui.date, 0, 1440);
     $('#agendaInfo').textContent = timed.length ? `${timed.length} ${timed.length === 1 ? 'meeting' : 'meetings'}${busy ? `, ${C.fmtDur(busy)}` : ''}` : '';
@@ -1003,23 +1142,21 @@
     let h = evs.map(o => {
       const c = o.mine ? MINE : calById(o.cal) || {};
       const link = C.eventLink(o);
-      const past = !o.allDay && o.end <= now && o.end > o.start;
-      const live = !o.allDay && o.start <= now && now < o.end;
-      const cls = `ev${past ? ' past' : ''}${live ? ' live' : ''}${o.allDay ? ' allday' : ''}${o.busy || o.allDay ? '' : ' free'}${o.mine ? ' mine' : ''}`;
-      const join = link ? `<button type="button" class="link ev-join" data-act="ev-open" data-url="${esc(link)}">${live || (!past && o.start - now < 15 * 60000) ? 'Join' : 'Link'}</button>` : '';
+      const cls = `ev${o.allDay ? ' allday' : ''}${o.busy || o.allDay ? '' : ' free'}${o.mine ? ' mine' : ''}`;
+      const join = link ? `<button type="button" class="link ev-join" data-act="ev-open" data-url="${esc(link)}">${icon('video')}Join</button>` : '';
       if (o.mine) {
         const m = myMeetings(ui.date).find(x => x.id === o.mid);
         const p = m.ref && proj(m.ref.p);
         return `<div class="${cls}" data-mid="${esc(m.id)}">` +
-          `<span class="ev-dot" style="background:${MINE.color}" title="${MINE.name}"></span>` +
+          `<span class="ev-dot cal-mine" title="${MINE.name}"></span>` +
           `<input class="ev-time-in" data-mtime value="${esc(C.meetingLabel(m, use12()))}" aria-label="Time of ${esc(m.title || 'the meeting')}" title="Change the time, like ${use12() ? '10:00–11:00 AM or 2 PM 1h' : '10:00–11:00 or 14:00 1h'}" ${INPUT_ATTRS}${ro}>` +
           `<input class="ev-title-in" data-mtitle value="${esc(m.title)}" aria-label="Meeting" placeholder="Meeting" ${INPUT_ATTRS}${ro}>` +
-          (p ? `<button type="button" class="pchip" data-act="open-project" data-pid="${esc(p.id)}" title="Open ${esc(projectTitle(p))}">${esc(projectTitle(p))}</button>` : '') +
-          join + (readOnly ? '' : '<button type="button" class="link ev-del" data-act="meeting-remove" title="Remove this meeting">Remove</button>') + '</div>';
+          (p ? `<button type="button" class="pchip${colorClass(p.color)}" data-act="open-project" data-pid="${esc(p.id)}" title="Open ${esc(projectTitle(p))}">${esc(projectTitle(p))}</button>` : '') +
+          join + (readOnly ? '' : `<button type="button" class="link ev-del" data-act="meeting-remove" title="Remove this meeting">${icon('trash-2')}Remove</button>`) + '</div>';
       }
       const where = o.loc && !/^https?:\/\//i.test(o.loc) ? o.loc : '';
       return `<div class="${cls}" title="${esc([o.title, where, c.name].filter(Boolean).join('\n'))}">` +
-        `<span class="ev-dot" style="background:${esc(c.color || CAL_COLORS[0])}"></span>` +
+        `<span class="ev-dot ${calClass(c.color)}"></span>` +
         `<span class="ev-time">${esc(C.eventTime(o, ui.date, use12()))}</span>` +
         `<span class="ev-title">${esc(o.title || 'Busy')}${where ? `<span class="ev-where">${esc(where)}</span>` : ''}</span>` + join + '</div>';
     }).join('');
@@ -1131,7 +1268,7 @@
   function renderCalList() {
     const ro = readOnly ? ' disabled' : '';
     $('#calList').innerHTML = D.calendars.length ? D.calendars.map(c =>
-      `<div class="cal" data-cal="${esc(c.id)}"><span class="ev-dot" style="background:${esc(c.color)}"></span>` +
+      `<div class="cal" data-cal="${esc(c.id)}"><span class="ev-dot ${calClass(c.color)}"></span>` +
       `<div class="cal-main"><input class="cal-name" data-cal-name value="${esc(c.name)}" aria-label="Calendar name" placeholder="Calendar" ${INPUT_ATTRS}${readOnly ? ' readonly' : ''}>` +
       `<span class="note${c.url && fetched[c.id] && fetched[c.id].error ? ' bad' : ''}">${esc(calStatus(c))}</span></div>` +
       `<label class="check small"><input type="checkbox" data-cal-show${c.hidden ? '' : ' checked'}${ro}> Show</label>` +
@@ -1262,10 +1399,10 @@
     const todo = own && l.ref.t ? own.todos.find(t => t.id === l.ref.t) : null;
     const ro = readOnly ? ' disabled' : '';
     if (todo) {
-      return `<button type="button" class="pchip todo" data-act="link-line" title="To-do of ${esc(projectTitle(own))}: ${esc(todo.text)}"${ro}>` +
+      return `<button type="button" class="pchip todo${colorClass(own.color)}" data-act="link-line" title="To-do of ${esc(projectTitle(own))}: ${esc(todo.text)}"${ro}>` +
         `${own !== parent ? `${esc(projectTitle(own))}, ` : ''}to-do</button>`;
     }
-    if (own && own !== parent) return `<button type="button" class="pchip" data-act="link-line" title="Linked to ${esc(projectTitle(own))}"${ro}>${esc(projectTitle(own))}</button>`;
+    if (own && own !== parent) return `<button type="button" class="pchip${colorClass(own.color)}" data-act="link-line" title="Linked to ${esc(projectTitle(own))}"${ro}>${esc(projectTitle(own))}</button>`;
     if (readOnly || (l.level && parent)) return '';
     return '<button type="button" class="link link-btn" data-act="link-line" title="Link to a project (⌘L)">Link</button>';
   }
@@ -1567,22 +1704,22 @@
   document.addEventListener('scroll', () => { const el = document.activeElement; if (!sugBox.hidden && el && el.matches(SUG_INPUTS)) sugPlace(el); }, true);
 
   /* ---------- choosing a goal's colour ---------- */
-  const colorPop = { goal: null, from: null };
+  const colorPop = { pid: null, from: null };
   function openColorPop(el) {
-    const g = ((D.weeks[week()] || {}).goals || []).find(x => x.id === el.dataset.goal);
-    if (!g || readOnly) return;
+    const p = proj(ui.project);
+    if (!p || readOnly) return;
     sugHide();
-    colorPop.goal = g.id;
+    colorPop.pid = p.id;
     colorPop.from = el;
     const box = $('#colorPop');
-    $('#colorPopHead').textContent = g.text.trim() || 'Week goal';
-    $('#colorPopList').innerHTML = Object.entries(GOAL_COLORS).map(([k, name]) =>
-      `<button type="button" class="swatch" data-color="${k}" style="--gc:var(--g-${k})" aria-label="${name}" title="${name}" aria-pressed="${g.color === k}"></button>`).join('') +
-      `<button type="button" class="swatch none" data-color="" aria-label="No colour" title="No colour" aria-pressed="${!g.color}"></button>`;
+    $('#colorPopHead').textContent = `Colour of ${projectTitle(p)}`;
+    const used = new Set(D.projects.filter(x => x !== p).map(x => x.color));
+    $('#colorPopList').innerHTML = Object.entries(COLORS).map(([k, name]) =>
+      `<button type="button" class="swatch gc gc-${k}${used.has(k) ? ' used' : ''}" data-color="${k}" aria-label="${name}${used.has(k) ? ', used by another project' : ''}" title="${name}${used.has(k) ? ' (used by another project)' : ''}" aria-pressed="${p.color === k}"></button>`).join('');
     box.hidden = false;
     const r = el.getBoundingClientRect();
     const w = box.offsetWidth, h = box.offsetHeight;
-    box.style.left = `${Math.max(12, Math.min(r.right - w, window.innerWidth - w - 12))}px`;
+    box.style.left = `${Math.max(12, Math.min(r.left, window.innerWidth - w - 12))}px`;
     box.style.top = `${r.bottom + 6 + h > window.innerHeight - 12 ? r.top - h - 6 : r.bottom + 6}px`;
     const on = box.querySelector('[aria-pressed="true"]');
     (on || box.querySelector('.swatch')).focus();
@@ -1592,18 +1729,16 @@
     if (box.hidden) return;
     box.hidden = true;
     if (refocus && colorPop.from && document.contains(colorPop.from)) colorPop.from.focus();
-    colorPop.goal = colorPop.from = null;
+    colorPop.pid = colorPop.from = null;
   }
   $('#colorPopList').addEventListener('click', e => {
     const b = e.target.closest('[data-color]');
-    const g = b && ((D.weeks[week()] || {}).goals || []).find(x => x.id === colorPop.goal);
-    if (!g || readOnly) return;
-    if (b.dataset.color) g.color = b.dataset.color; else delete g.color;
-    closeColorPop(false);
+    const p = b && proj(colorPop.pid);
+    if (!p || readOnly || !COLORS[b.dataset.color]) return;
+    p.color = b.dataset.color;
+    closeColorPop(true);
     changed();
-    goalsOL.refresh();
-    tasksOL.refresh();
-    renderBudget();
+    renderSheet(p);
   });
   $('#colorPop').addEventListener('keydown', e => {
     const list = [...$('#colorPopList').querySelectorAll('.swatch')];
@@ -1612,7 +1747,7 @@
     else if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { e.preventDefault(); list[Math.min(list.length - 1, i + 1)].focus(); }
     else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { e.preventDefault(); list[Math.max(0, i - 1)].focus(); }
   });
-  document.addEventListener('mousedown', e => { if (!$('#colorPop').hidden && !e.target.closest('#colorPop, [data-act="goal-color"]')) closeColorPop(false); });
+  document.addEventListener('mousedown', e => { if (!$('#colorPop').hidden && !e.target.closest('#colorPop, [data-act="project-color"]')) closeColorPop(false); });
   window.addEventListener('resize', () => closeColorPop(false));
 
   /* ---------- linking a plan line to a project or to-do ---------- */
@@ -1787,7 +1922,7 @@
       ? `<button type="button" class="grip" data-grip aria-label="Move ${esc(projectTitle(p))}" title="Drag to reorder, or use the arrow keys"></button>`
       : '<span class="grip-space"></span>';
     return `<div class="srow" data-sort-id="${esc(p.id)}" data-sort-kind="project">${grip}` +
-      `<button type="button" class="prow${on ? ' picked' : ''}" data-act="${sel ? 'select-project' : 'open-project'}" data-pid="${esc(p.id)}"${sel ? ` role="checkbox" aria-checked="${on}"` : ''}>` +
+      `<button type="button" class="prow${on ? ' picked' : ''}${colorClass(p.color)}" data-act="${sel ? 'select-project' : 'open-project'}" data-pid="${esc(p.id)}"${sel ? ` role="checkbox" aria-checked="${on}"` : ''}>` +
       (sel ? `<span class="chk" aria-hidden="true"${on ? ' aria-pressed="true"' : ''}></span>` : '') +
       `<span class="pnum">${p.num}</span>` +
       `<span class="pmain"><span class="pname">${esc(p.name.trim() || 'Untitled project')}</span>` +
@@ -1808,9 +1943,16 @@
         `<button type="button" class="btn ghost danger" data-act="batch-delete"${n ? '' : ' disabled'}>Delete</button>` +
         '<button type="button" class="btn" data-act="select-done">Done</button>'
       : '<h1>Projects</h1>' +
-        (D.projects.length ? `<button type="button" class="btn ghost" data-act="select-start"${readOnly ? ' disabled' : ''}>Select</button>` : '') +
-        `<button type="button" class="btn ghost" data-act="md-open"${readOnly ? ' disabled' : ''} title="Import project notes saved as Markdown, for example from Notes">Import</button>` +
-        `<button type="button" class="btn" data-act="project-new"${readOnly ? ' disabled' : ''}>New project</button>`;
+        (D.projects.length ? `<div class="seg" role="group" aria-label="Show as">${['list', 'board'].map(v =>
+          `<button type="button" data-act="project-view" data-view="${v}" aria-pressed="${projectView() === v}">${icon(v === 'list' ? 'list' : 'kanban')}${v === 'list' ? 'List' : 'Board'}</button>`).join('')}</div>` : '') +
+        (D.projects.length && projectView() === 'list' ? `<button type="button" class="btn ghost" data-act="select-start"${readOnly ? ' disabled' : ''}>${icon('square-check-big')}Select</button>` : '') +
+        `<button type="button" class="btn ghost" data-act="md-open"${readOnly ? ' disabled' : ''} title="Import project notes saved as Markdown, for example from Notes">${icon('import')}Import</button>` +
+        `<button type="button" class="btn" data-act="project-new"${readOnly ? ' disabled' : ''}>${icon('plus')}New project</button>`;
+    document.body.classList.toggle('wide', projectView() === 'board' && !ui.selecting && !!active.length);
+    if (projectView() === 'board' && !ui.selecting && active.length) {
+      $('#projItems').innerHTML = renderBoard() + (archived.length ? `<p class="hint">${archived.length} done ${archived.length === 1 ? 'project isn’t' : 'projects aren’t'} on the board; they’re in the list.</p>` : '');
+      return;
+    }
     let h = active.length
       ? `<div class="plist" id="projOrder">${active.map(projectRow).join('')}</div>` +
         (active.length > 1 && !ui.selecting && !readOnly ? '<p class="hint list-hint">Drag a project by the dots to change its place. Its number follows its place in the list.</p>' : '')
@@ -1818,6 +1960,111 @@
     if (archived.length) h += `<details class="archived"${ui.selecting || ui.showArchived ? ' open' : ''}><summary>Done (${archived.length})</summary><div class="plist">${archived.map(projectRow).join('')}</div></details>`;
     $('#projItems').innerHTML = h;
   }
+  /* ---------- the project board: columns by deadline ---------- */
+  const projectView = () => (D.settings.projectView === 'board' ? 'board' : 'list');
+  function boardCard(p) {
+    const t = today();
+    const due = C.dueLabel(p.fields.deadline, t);
+    const who = C.firstLine(p.fields.spoc);
+    const next = C.nextPhase(p);
+    const n = openTodos(p);
+    return `<button type="button" class="card${colorClass(p.color)}" data-act="open-project" data-pid="${esc(p.id)}" data-card="${esc(p.id)}">` +
+      `<span class="card-name"><span class="pnum">${p.num}</span> ${esc(p.name.trim() || 'Untitled project')}</span>` +
+      (who ? `<span class="card-meta">${esc(who)}</span>` : '') +
+      (next ? `<span class="card-meta">Next: ${esc(next.text)}</span>` : '') +
+      `<span class="card-foot">${dueHtml(due)}${n ? `<span class="note">${n} to ${n === 1 ? 'do' : 'dos'}</span>` : ''}</span></button>`;
+  }
+  function renderBoard() {
+    const t = today();
+    const ranges = C.bucketRanges(t);
+    const open = activeProjects();
+    const cols = C.BUCKETS.filter(b => b.id !== 'month' || ranges.month)
+      .map(b => ({ ...b, items: open.filter(p => C.deadlineBucket(p.fields.deadline, t) === b.id) }))
+      .filter(b => b.id !== 'overdue' || b.items.length);
+    for (const c of cols) c.items.sort((a, b) => (a.fields.deadline || '9999') < (b.fields.deadline || '9999') ? -1 : (a.fields.deadline || '9999') > (b.fields.deadline || '9999') ? 1 : a.num - b.num);
+    const span = id => {
+      const r = ranges[id];
+      if (!r || id === 'later') return '';
+      return r[0] === r[1] ? C.fmtShort(r[0]) : `${C.fmtShort(r[0])} – ${C.fmtShort(r[1])}`;
+    };
+    return `<div class="board" id="board">${cols.map(c =>
+      `<section class="col${c.id === 'overdue' ? ' late' : ''}" data-col="${c.id}" aria-label="${esc(c.name)}">` +
+      `<header><h2>${esc(c.name)}</h2><span class="note">${c.items.length || ''}</span><span class="col-span">${esc(span(c.id))}</span></header>` +
+      `<div class="col-cards">${c.items.map(boardCard).join('') || '<p class="col-empty">No projects</p>'}</div></section>`).join('')}</div>` +
+      (readOnly ? '' : '<p class="hint list-hint">Drag a card to another column to change its deadline: the Friday of the week, the last working day of the month, a date you choose for Later, or none.</p>');
+  }
+  // Setting a deadline from the board, with an undo in the message.
+  const dateDlg = { pid: null };
+  function setDeadline(p, date, how) {
+    const before = p.fields.deadline || '';
+    if ((date || '') === before) return;
+    if (date) p.fields.deadline = date; else delete p.fields.deadline;
+    changed();
+    renderProjects();
+    toast(date ? `Deadline of ${projectTitle(p)}: ${C.fmtLong(date)}` : `${projectTitle(p)} has no deadline now`,
+      [{ label: 'Undo', run: () => undoStep(false) }].concat(how === 'drop' && date ? [{ label: 'Change', run: () => askDeadline(p, '') }] : []));
+  }
+  function askDeadline(p, min) {
+    dateDlg.pid = p.id;
+    $('#dd-title').textContent = `Deadline of ${projectTitle(p)}`;
+    $('#ddHint').textContent = min ? `Later means after ${C.fmtLong(C.addDays(min, -1))}.` : '';
+    const input = $('#ddDate');
+    input.min = min || '';
+    input.value = p.fields.deadline && (!min || p.fields.deadline >= min) ? p.fields.deadline : min || today();
+    $('#dateDlg').showModal();
+    input.focus();
+  }
+  $('#ddDate').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); actions['date-apply'](); } });
+  function dropCard(pid, col) {
+    const p = proj(pid);
+    if (!p || readOnly || col === 'overdue' || C.deadlineBucket(p.fields.deadline, today()) === col) return;
+    if (col === 'none') { setDeadline(p, '', 'drop'); return; }
+    if (col === 'later') { askDeadline(p, C.bucketRanges(today()).later[0]); return; }
+    const date = C.bucketDate(col, today());
+    if (date) setDeadline(p, date, 'drop');
+  }
+  // Dragging a card: a short move starts the drag, so a click still opens the project.
+  (() => {
+    let drag = null, swallow = false;
+    const box = $('#projItems');
+    const clear = () => { for (const el of box.querySelectorAll('.col.drop-into')) el.classList.remove('drop-into'); };
+    box.addEventListener('pointerdown', e => {
+      const card = e.target.closest('[data-card]');
+      if (!card || readOnly || e.button !== 0) return;
+      drag = { card, x0: e.clientX, y0: e.clientY, moved: false, to: null, id: e.pointerId };
+    });
+    box.addEventListener('pointermove', e => {
+      if (!drag) return;
+      if (!drag.moved) {
+        if (Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) < 6) return;
+        drag.moved = true;
+        try { drag.card.setPointerCapture(drag.id); } catch {}
+        drag.card.classList.add('dragging');
+        document.body.classList.add('sorting');
+      }
+      clear();
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      const col = el && el.closest('.col');
+      const from = drag.card.closest('.col');
+      drag.to = col && col !== from && col.dataset.col !== 'overdue' ? col.dataset.col : null;
+      if (drag.to) col.classList.add('drop-into');
+    });
+    const end = apply => {
+      if (!drag) return;
+      const { card, to, moved } = drag;
+      drag = null;
+      clear();
+      card.classList.remove('dragging');
+      document.body.classList.remove('sorting');
+      if (moved) swallow = true;
+      if (apply && moved && to) dropCard(card.dataset.card, to);
+    };
+    box.addEventListener('pointerup', () => end(true));
+    box.addEventListener('pointercancel', () => end(false));
+    // After a drag, the click that follows isn't an "open the project".
+    box.addEventListener('click', e => { if (swallow) { swallow = false; e.stopPropagation(); e.preventDefault(); } }, true);
+  })();
+
   $('#projItems').addEventListener('toggle', e => { if (e.target.matches('details.archived')) ui.showArchived = e.target.open; }, true);
   sortable($('#projItems'), {
     accept: (a, t) => t.dataset.sortKind === 'project' && !!t.closest('#projOrder'),
@@ -1838,6 +2085,7 @@
       fields: {}, schedule: C.scheduleFrom(D.settings.defaultSchedule, uid), todos: [], copy: normalizeCopy(null)
     };
     if (!p.copy) p.copy = normalizeCopy(null);
+    if (!COLORS[p.color] || base) p.color = freeColor(D.projects, p);
     const firstArchived = D.projects.findIndex(x => x.archived);
     D.projects.splice(firstArchived < 0 ? D.projects.length : firstArchived, 0, p);
     C.renumberProjects(D.projects);
@@ -1885,6 +2133,10 @@
     return `<button type="button" class="link set-date" data-act="set-date" data-key="${esc(key)}"${ro}>${esc(emptyLabel)}</button>`;
   }
   function renderSheet(p) {
+    const dot = $('#pColor');
+    dot.className = `pdot${colorClass(p.color)}`;
+    dot.disabled = !!readOnly;
+    dot.setAttribute('aria-label', `Colour of this project: ${COLORS[p.color] || 'none'}`);
     const name = $('#pName');
     if (document.activeElement !== name) name.value = p.name;
     name.readOnly = !!readOnly;
@@ -2571,7 +2823,7 @@
       h += '<div class="own"><p class="hint">You’re changing this email directly, so the template and its blanks no longer apply to it. Your changes are kept until you clear them.</p>' +
         `<label class="ef wide">Subject<input data-mtext="subject" value="${esc(own.subject)}" lang="${lang}" ${PROSE_ATTRS}${readOnly ? ' readonly' : ''}></label>` +
         `<label class="ef wide">Email<textarea data-mtext="body" rows="10" lang="${lang}" ${PROSE_ATTRS}${readOnly ? ' readonly' : ''}>${esc(own.body)}</textarea></label>` +
-        `<div class="chips"><button type="button" class="chip" data-act="link-open"${readOnly ? ' disabled' : ''} title="Add a link (${MOD}K)">Link…</button>` +
+        `<div class="chips"><button type="button" class="chip" data-act="link-open"${readOnly ? ' disabled' : ''} title="Add a link (${MOD}K)">${icon('link')}Link…</button>` +
         '<span class="hint">Select some text first to turn it into a link.</span></div></div>';
     } else {
       if (blanks.length) h += `<div class="blanks"><h2>Fill in</h2>${blanks.map(n => {
@@ -2585,10 +2837,10 @@
       h += '<div class="preview" aria-live="polite"><p class="psubj" id="pvSubject"></p><div class="pbody" id="pvBody"></div></div>';
     }
     const raw = own ? own.body : c.body;
-    h += '<div class="actions"><button type="button" class="btn" data-act="mail-copy" data-what="body">Copy email</button>' +
+    h += `<div class="actions"><button type="button" class="btn" data-act="mail-copy" data-what="body">${icon('copy')}Copy email</button>` +
       '<button type="button" class="btn ghost" data-act="mail-copy" data-what="subject">Copy subject</button>' +
-      '<button type="button" class="btn ghost" data-act="mail-open">Open in mail app</button>' +
-      `<button type="button" class="btn ghost" data-act="mail-review" title="Opens ${esc(assistantName())} with a request to check the language">Review with ${esc(assistantName())}</button>` +
+      `<button type="button" class="btn ghost" data-act="mail-open">${icon('send')}Open in mail app</button>` +
+      `<button type="button" class="btn ghost" data-act="mail-review" title="Opens ${esc(assistantName())} with a request to check the language">${icon('sparkles')}Review with ${esc(assistantName())}</button>` +
       '<span class="missing" id="mailMissing"></span></div>' +
       '<div class="draft-bar">' +
       (own ? `<button type="button" class="link" data-act="mail-unedit"${readOnly ? ' disabled' : ''}>Back to the template’s text</button>`
@@ -2632,7 +2884,7 @@
       `<div class="ef"><span>Language</span>${langSeg(lang, tplLangs(t), true)}</div>` +
       `<label class="ef wide">Subject<input data-tpl="subject" value="${esc(c.subject)}" lang="${lang}" ${PROSE_ATTRS}${ro}></label>` +
       `<label class="ef wide">Email<textarea data-tpl="body" rows="10" lang="${lang}" ${PROSE_ATTRS}${ro}>${esc(c.body)}</textarea></label>` +
-      `<div class="chips" aria-label="Insert a project detail"><button type="button" class="chip link-chip" data-act="link-open"${readOnly ? ' disabled' : ''} title="Add a link (${MOD}K)">Link…</button><span class="hint">Insert:</span>${chips.map(n =>
+      `<div class="chips" aria-label="Insert a project detail"><button type="button" class="chip link-chip" data-act="link-open"${readOnly ? ' disabled' : ''} title="Add a link (${MOD}K)">${icon('link')}Link…</button><span class="hint">Insert:</span>${chips.map(n =>
         `<button type="button" class="chip" data-act="tpl-insert" data-name="${n}"${readOnly ? ' disabled' : ''}>${esc(C.humanize(n))}</button>`).join('')}</div>` +
       '<p class="hint">Project details fill in by themselves. Anything else you write in {{double braces}}, like {{next_steps}}, becomes a blank to fill in when you use the template. A link is written [text](address); select some text and choose Link to add one. The address can be a detail too, like {{task_link}}.</p>' +
       `<div class="actions"><button type="button" class="btn" data-act="tpl-edit">Done editing</button>` +
@@ -2793,8 +3045,46 @@
     render();
   }
   const actions = {
-    prev: () => goToDate(C.addDays(ui.date, -1)),
-    next: () => goToDate(C.addDays(ui.date, 1)),
+    prev: () => goToDate(C.addDays(ui.date, planMode() === 'week' ? -7 : -1)),
+    next: () => goToDate(C.addDays(ui.date, planMode() === 'week' ? 7 : 1)),
+    'plan-mode': el => {
+      D.settings.planView = el.dataset.mode === 'week' ? 'week' : 'day';
+      changed({ view: true });
+      renderPlan();
+    },
+    'open-day': el => { D.settings.planView = 'day'; changed({ view: true }); goToDate(el.dataset.date); },
+    'project-view': el => {
+      D.settings.projectView = el.dataset.view === 'board' ? 'board' : 'list';
+      changed({ view: true });
+      renderProjects();
+    },
+    'date-apply': () => {
+      const p = proj(dateDlg.pid);
+      const v = $('#ddDate').value;
+      if (!p || !C.isDate(v)) return;
+      if ($('#ddDate').min && v < $('#ddDate').min) { $('#ddHint').textContent = `Choose a date from ${C.fmtLong($('#ddDate').min)}.`; return; }
+      $('#dateDlg').close();
+      setDeadline(p, v, 'dialog');
+    },
+    'timesheet-day': () => {
+      toggleMenu(false);
+      const text = C.timesheetDay(C.timesheetEntries(D.days, [ui.date], projName), ui.date);
+      if (text) copy(text, 'Timesheet for the day copied'); else toast('Nothing checked as done that day, with a duration');
+    },
+    'timesheet-week': () => {
+      toggleMenu(false);
+      const text = C.timesheetWeek(weekEntries(), week());
+      if (text) copy(text, 'Timesheet for the week copied'); else toast('Nothing checked as done this week, with a duration');
+    },
+    'timesheet-csv': async () => {
+      toggleMenu(false);
+      const entries = weekEntries();
+      if (!entries.length) { toast('Nothing checked as done this week, with a duration'); return; }
+      try {
+        const where = await Backend.saveCsv(`Timesheet ${week()}.csv`, C.timesheetCsv(entries));
+        if (where) toast(`Saved to ${where}`);
+      } catch (e) { toast(String((e && e.message) || e)); }
+    },
     today: () => goToDate(today()),
     carry: el => {
       const src = el.dataset.src;
@@ -2980,7 +3270,17 @@
       if (ui.view === 'plan') { renderAgenda(); renderBudget(); }
     },
     'meeting-remove': el => { const m = meetingOf(el); if (m) removeMeeting(m.id); },
-    'goal-color': el => { if (!$('#colorPop').hidden && colorPop.from === el) closeColorPop(true); else openColorPop(el); },
+    'project-color': el => { if (!$('#colorPop').hidden && colorPop.from === el) closeColorPop(true); else openColorPop(el); },
+    'timesheet-csv-day': async () => {
+      toggleMenu(false);
+      const day = planMode() === 'week' ? today() : ui.date;
+      const entries = C.timesheetEntries(D.days, [day], projName);
+      if (!entries.length) { toast(`Nothing checked as done on ${C.fmtShort(day)}, with a duration`); return; }
+      try {
+        const where = await Backend.saveCsv(`Timesheet ${day}.csv`, C.timesheetCsv(entries));
+        if (where) toast(`Saved to ${where}`);
+      } catch (e) { toast(String((e && e.message) || e)); }
+    },
     'ev-open': el => Backend.open(el.dataset.url).catch(e => toast(String(e))),
     'tp-use': () => useTemplatePick(),
     'cat-new': () => {
@@ -3263,13 +3563,31 @@
   }
 
   let toastTimer = 0;
-  function toast(msg) {
+  let toastActions = [];
+  function toast(msg, buttons) {
     const t = $('#toast');
-    t.textContent = msg;
+    toastActions = buttons || [];
+    t.replaceChildren(document.createTextNode(msg));
+    toastActions.forEach((b, i) => {
+      const el = document.createElement('button');
+      el.type = 'button';
+      el.className = 'toast-btn';
+      el.dataset.toast = String(i);
+      el.textContent = b.label;
+      t.append(el);
+    });
+    t.classList.toggle('actions', !!toastActions.length);
     t.classList.add('show');
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => t.classList.remove('show'), 2600);
+    toastTimer = setTimeout(() => t.classList.remove('show'), toastActions.length ? 7000 : 2600);
   }
+  $('#toast').addEventListener('click', e => {
+    const b = e.target.closest('[data-toast]');
+    if (!b) return;
+    const a = toastActions[Number(b.dataset.toast)];
+    $('#toast').classList.remove('show');
+    if (a) a.run();
+  });
 
   /* ---------- settings ---------- */
   function renderSettings() {
@@ -3370,6 +3688,13 @@
   /* ---------- keyboard and lifecycle ---------- */
   document.addEventListener('keydown', e => {
     if ((e.metaKey || e.ctrlKey) && e.key === ',') { e.preventDefault(); openSettings(); return; }
+    // Undo and redo are the app's, so they also bring back deleted lines, projects or deadlines.
+    if ((e.metaKey || e.ctrlKey) && !e.altKey && (e.key === 'z' || e.key === 'Z') && !document.querySelector('dialog[open]')) {
+      e.preventDefault();
+      flush();
+      undoStep(e.shiftKey);
+      return;
+    }
     if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && ['1', '2', '3'].includes(e.key) && !document.querySelector('dialog[open]')) {
       e.preventDefault();
       setView(VIEWS[Number(e.key) - 1]);
@@ -3388,6 +3713,7 @@
     if (e.key === 'ArrowLeft') { e.preventDefault(); actions.prev(); }
     else if (e.key === 'ArrowRight') { e.preventDefault(); actions.next(); }
     else if (e.key === 't' || e.key === 'T') actions.today();
+    else if (e.key === 'd' || e.key === 'D' || e.key === 'w' || e.key === 'W') actions['plan-mode']({ dataset: { mode: /w/i.test(e.key) ? 'week' : 'day' } });
     else if (e.key === 'n' || e.key === 'N') { e.preventDefault(); tasksOL.focusGhost(); }
   });
   window.addEventListener('blur', () => flush());
@@ -3402,12 +3728,22 @@
       ui.today = t;
       if (follow) { goToDate(t); return; }
     }
-    renderBudget();
-    if (ui.view === 'plan') renderAgenda();
     refreshCalendars();
   }
 
   async function boot() {
+    for (const el of document.querySelectorAll('[data-icon]')) el.insertAdjacentHTML('afterbegin', icon(el.dataset.icon));
+    const scrolled = () => document.body.classList.toggle('scrolled', window.scrollY > 4);
+    // Where sticky things stop: under the tabs, and under the view's own header (for the board's columns).
+    const measure = () => {
+      const root = document.documentElement.style;
+      root.setProperty('--tabs-h', `${$('.tabs').offsetHeight}px`);
+      const head = [...document.querySelectorAll('.sticky-view')].find(el => el.offsetParent && !el.closest('[hidden]'));
+      root.setProperty('--head-h', `${head ? head.offsetHeight : 0}px`);
+    };
+    window.addEventListener('resize', measure);
+    new ResizeObserver(measure).observe(document.body);
+    window.addEventListener('scroll', scrolled, { passive: true });
     setupOutlines();
     try { applyLoaded(await Backend.load()); }
     catch (e) {

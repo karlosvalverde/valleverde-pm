@@ -362,6 +362,26 @@ async fn save_text_file(app: AppHandle, name: String, content: String) -> Result
     Ok(Some(path.display().to_string()))
 }
 
+/// Asks where to save a CSV file (a timesheet), then writes it. Returns the path, or None if cancelled.
+#[tauri::command]
+async fn save_csv_file(app: AppHandle, name: String, content: String) -> Result<Option<String>, String> {
+    let mut file_name = safe_md_name(name.trim_end_matches(".csv"));
+    file_name = format!("{}.csv", file_name.trim_end_matches(".md"));
+    let Some(picked) = app
+        .dialog()
+        .file()
+        .set_title("Save the timesheet")
+        .set_file_name(&file_name)
+        .add_filter("CSV", &["csv"])
+        .blocking_save_file()
+    else {
+        return Ok(None);
+    };
+    let path = picked.into_path().map_err(err)?;
+    fs::write(&path, content).map_err(|e| format!("Couldn't write {}: {e}", path.display()))?;
+    Ok(Some(path.display().to_string()))
+}
+
 /// Asks for a folder, then writes each Markdown file into it without overwriting anything.
 #[tauri::command]
 async fn save_text_files(app: AppHandle, files: Vec<TextFile>) -> Result<Option<String>, String> {
@@ -496,7 +516,8 @@ pub fn run() {
             save_text_file,
             save_text_files,
             fetch_calendar,
-            clock_format
+            clock_format,
+            save_csv_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running Valleverde PM");
