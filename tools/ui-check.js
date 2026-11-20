@@ -53,7 +53,12 @@ const sample = {
 // The desktop side, simulated: the data file, saving, and what's copied.
 const fake = `(() => {
   window.__csp = [];
-  document.addEventListener('securitypolicyviolation', e => window.__csp.push(e.violatedDirective + ' ' + (e.sample || '')));
+  window.__step = 'loading';
+  // Where each block comes from: the check running, the file, the line and what was blocked.
+  document.addEventListener('securitypolicyviolation', e => window.__csp.push(
+    \`\${e.violatedDirective} during "\${window.__step}" at \${e.sourceFile || '(no file)'}:\${e.lineNumber}:\${e.columnNumber}\` +
+    (e.sample ? \` sample "\${e.sample}"\` : '') + \` on <\${e.target && e.target.nodeName ? e.target.nodeName.toLowerCase() : '?'}\` +
+    (e.target && e.target.className && typeof e.target.className === 'string' ? \` class="\${e.target.className}"\` : '') + '>'));
   const st = window.__fake = { content: ${JSON.stringify(JSON.stringify(sample))}, mtime: 1, copied: '', csv: null };
   window.__TAURI__ = { core: { invoke: async (cmd, args) => {
     if (cmd === 'load_workspace') return { path: '/x/valleverde.json', dir: '/x', content: st.content, mtime: st.mtime };
@@ -80,8 +85,9 @@ await page.waitForSelector('#app:not([hidden])');
 
 let failed = 0;
 async function check(title, fn) {
+  await page.evaluate(t => { window.__step = t; }, title).catch(() => {});
   try { await fn(); console.log(`  ok  ${title}`); }
-  catch (e) { failed++; console.log(`  FAIL ${title}\n       ${String(e.message || e).split('\n')[0]}`); }
+  catch (e) { failed++; console.log(`  FAIL ${title}\n       ${String(e.message || e)}`); }
 }
 const eq = (a, b, what) => { if (a !== b) throw new Error(`${what}: got ${JSON.stringify(a)}, expected ${JSON.stringify(b)}`); };
 const ok = (v, what) => { if (!v) throw new Error(what); };
@@ -183,7 +189,8 @@ await check('selected text is highlighted only inside its box', async () => {
   ok(before[1].equals(after[1]), 'the highlight runs out of the box on the right');
 });
 await check('nothing is blocked by the content-security policy, and no errors', async () => {
-  eq(JSON.stringify(await page.evaluate('window.__csp')), '[]', 'blocked');
+  const blocked = await page.evaluate('window.__csp');
+  if (blocked.length) throw new Error(`blocked:\n         ${blocked.join('\n         ')}`);
   eq(JSON.stringify(errors), '[]', 'errors');
 });
 
