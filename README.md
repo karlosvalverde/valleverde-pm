@@ -179,7 +179,7 @@ To release a version:
 
 1. Update the version in `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` and `APP_VERSION` in `src/app.js`.
 2. Move the changes under **Unreleased** in [CHANGELOG.md](CHANGELOG.md) to a new `## [x.y.z] - date` heading.
-3. Run `npm run check`, which confirms the versions match and runs the logic tests.
+3. Run `npm run check`, which confirms the versions match and runs the logic tests. On GitHub, every push also runs `npm run test:ui`, which checks the interface in WebKit, the engine of the Mac app (to run it yourself: `npx playwright install webkit` first).
 4. Commit, tag and push:
 
 ```bash
