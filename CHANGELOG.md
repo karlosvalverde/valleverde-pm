@@ -5,6 +5,27 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-20
+
+### Added
+- **A board for projects.** **List** and **Board** at the top of Projects. The board has a column per deadline: Overdue, This week, Next week, This month, Later and No deadline, each with its dates. Drag a card to another column to set its deadline: the Friday of the week, the last working day of the month, a date you choose for Later, or none. The message that follows has **Undo** and **Change**. A click still opens the project. Projects marked as done stay in the list.
+- **The week, in the plan.** **Day** and **Week** next to the date, or the keys D and W. The week has a row per day with what's planned against your working hours, the same bar in small, and the day's tasks. Drag a task to another day to move it there; like **Bring them over**, the first day keeps it as moved. Click a day to plan it. ← and → go by week.
+- **Timesheets for Odoo,** in the ⋯ menu of the plan: **Copy timesheet for the day**, with each project and its tasks; **Copy timesheet for the week**, as a table of projects and days; and **Save timesheet as CSV…**, with Odoo's field names as headers (`date`, `project_id`, `name`, `unit_amount`) for its import. Only what's checked as done counts, with its planned duration, under its project or, without one, under its heading.
+- **Undo and redo** with ⌘Z and ⇧⌘Z, everywhere: a deleted line or project, a task moved to another day, a deadline set on the board, a template change. Typing in one field is one step. Switching between Day and Week, or List and Board, isn't a step.
+- **A colour for each project,** to tell them apart: a stripe in the list and on the board, the project's chip in the plan, its tasks in the week and on the day's bar. Every project gets a colour no other project has (12 of them), and you can change it with the dot next to its name. Colours already used by other projects show faded in the palette.
+- **Icons,** from [Lucide](https://lucide.dev): in the tabs, Day and Week, List and Board, and the main buttons. They're part of the app, so it stays offline.
+- **Headers stay at the top** when you scroll: the tabs, each view's header, a project's or a template's bar, and the board's column headings.
+- **Save the day's timesheet as CSV…,** next to the week's.
+- **Interface checks on GitHub,** in WebKit, the engine of the Mac app, under the app's own content-security policy: `npm run test:ui`, on every push.
+
+### Changed
+- **Colours belong to projects now, not to week goals.** The colours given to goals in 0.6.3 are dropped, and the Goal badges are plain again. Tasks without a project stay green on the bar.
+- The board wraps its columns on narrow windows instead of scrolling sideways.
+- **The plan no longer follows the clock.** Free time is your working day (End minus Begin) less everything planned, done or not, and your meetings. It reads the same at 10:00 and at 17:00, and on a past day. The bar shares the day out: done, still to do (in goal colours), meetings, then free, and anything that doesn't fit in red past the end of the day. It no longer shows the time gone or a mark for now. The agenda no longer fades past meetings or highlights the current one, and **Join** is always called Join.
+
+### Fixed
+- **Colours didn't show in the app:** the colour palette, and the dots of the agenda and calendars. The app's security rule (`style-src 'self'`) ignores colours written into the page; they're now set by the stylesheet.
+
 ## [0.6.3] - 2026-11-10
 
 ### Added

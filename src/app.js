@@ -1,7 +1,7 @@
 /* Valleverde PM: the interface. Logic that doesn't touch the page lives in core.js. */
 (() => {
   'use strict';
-  const APP_VERSION = '0.6.3';
+  const APP_VERSION = '0.7.0';
   const SCHEMA = 6;
   const C = globalThis.Core;
 
